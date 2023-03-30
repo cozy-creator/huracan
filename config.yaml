@@ -31,3 +31,4 @@ sui:
   api:
     http: "https://fullnode.devnet.sui.io:443"
     ws: "wss://fullnode.devnet.sui.io:443"
+  eventfilter: "{\"All\":[]}"

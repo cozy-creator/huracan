@@ -53,12 +53,14 @@ pub struct SuiApiConfig {
 #[serde(deny_unknown_fields)]
 pub struct SuiConfig {
     pub api: SuiApiConfig,
+    #[serde(alias = "eventfilter")]
+    pub event_filter: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct CLevel(pub tracing::Level);
 
-impl std::ops::Deref for CLevel {
+impl Deref for CLevel {
     type Target = tracing::Level;
 
     fn deref(&self) -> &Self::Target {

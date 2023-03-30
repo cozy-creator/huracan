@@ -79,8 +79,6 @@ fn setup_signal_handler(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
             }
         }
 
-        info!("Signal handler is done...");
-
         drop(tx_force_term);
     });
 
@@ -103,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (rx_term, rx_force_term) = setup_signal_handler(&cfg);
     info!("Awaiting termination signal...");
 
-    let extractor = Extractor::new(&cfg.sui.api.http, &cfg.sui.api.ws, rx_term);
+    let extractor = Extractor::new(&cfg.sui, rx_term);
     let loader = Loader::new(
         &cfg.loader,
         &cfg.pulsar,

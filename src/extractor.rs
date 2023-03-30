@@ -1,11 +1,11 @@
 use {
     crate::_prelude::*,
-    crate::conf::{LoaderConfig, PulsarConfig},
+    crate::conf::{LoaderConfig, PulsarConfig, SuiConfig},
 };
 
 use anyhow::Result;
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
-use sui_sdk::rpc_types::{EventFilter, SuiEvent};
+use sui_sdk::rpc_types::SuiEvent;
 use sui_sdk::SuiClientBuilder;
 
 use pulsar::{
@@ -39,8 +39,7 @@ pub struct Extractor {
     pub rx: Receiver<ExtractedEvent>,
 
     tx: Sender<ExtractedEvent>,
-    api_https_uri: String,
-    api_ws_uri: String,
+    cfg: SuiConfig,
 }
 
 impl Loader {
@@ -133,30 +132,33 @@ impl Loader {
 }
 
 impl Extractor {
-    pub fn new(api_https_uri: &str, api_ws_uri: &str, rx_term: Receiver<()>) -> Self {
+    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> Self {
         let (tx, rx) = bounded_ch(100);
         Self {
             rx_term,
             tx,
             rx,
-            api_https_uri: String::from(api_https_uri),
-            api_ws_uri: String::from(api_ws_uri),
+            cfg: cfg.clone(),
         }
     }
 
     pub async fn extract(self) -> Result<()> {
         let sui = SuiClientBuilder::default()
-            .ws_url(&self.api_ws_uri)
-            .build(&self.api_https_uri)
+            .ws_url(&self.cfg.api.ws)
+            .build(&self.cfg.api.http)
             .await
             .context("cannot create sui client")?;
 
+        let event_filter = serde_json::from_str(&self.cfg.event_filter)
+            .context("invalid event filter specified")?;
+
         let mut subscription = sui
             .event_api()
-            .subscribe_event(EventFilter::All(vec![]))
+            .subscribe_event(event_filter)
             .await
             .context("cannot subscribe to sui event stream")?;
 
+        info!("Starting event consumption...");
         let rx_term = self.rx_term.clone();
         loop {
             tokio::select! {
