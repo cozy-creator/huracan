@@ -1,0 +1,22 @@
+[package]
+name = "sui-data-loader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+futures = "0.3"
+config = "0.13.1"
+flume = "0.10.14"
+humanize-rs = "0.1"
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+tracing-futures = "~0.2.5"
+
+tokio = { version = "1.27.0", features = ["full"] }
+sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "devnet-0.29.0" }
+pulsar = "5.1"
+relabuf = "~0.16.0"
+
+serde_json = "1.0"
+serde = {version = "~1.0.125", features = ["derive"] }

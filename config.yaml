@@ -1,0 +1,33 @@
+log:
+ # fancy some colors? - disable if redirect to file is intended
+  ansi: true
+  # base-line log level
+  level: info
+  # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
+  # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
+  #filter:
+
+shutdown:
+  # when we first get shutdown signal we stop ingesting new events and wait up to graceful_timeout to finish sending existing data to pulsar
+  timeout: 10s
+
+loader:
+  # we batch data before sending it to Apache Pulsar
+  batcher:
+    # send batch as soon as reach a soft_cap of buffered events
+    softcap: 30
+    # there's also a hard cap of events we buffer per loader
+    hardcap: 100
+    # unconditionally send batch after specified period of time even if soft_cap isn't quite reached yet
+    # prevents starvation adhering to some minimal latency when loader is starving for data
+    releaseafter: 500ms
+
+pulsar:
+  uri: "pulsar://localhost:6650"
+  topic: "sui-events"
+  producer: "my-producer"
+
+sui:
+  api:
+    http: "https://fullnode.devnet.sui.io:443"
+    ws: "wss://fullnode.devnet.sui.io:443"
