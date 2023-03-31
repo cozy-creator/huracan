@@ -104,7 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Log system configured...: {} with filtering: {:?}",
         *cfg.log.level, cfg.log.filter
     );
-    info!("{:#?}", &cfg);
+    if args.print_config {
+        info!("{:#?}", &cfg);
+    }
 
     let (rx_term, rx_force_term) = setup_signal_handler(&cfg);
     info!("Awaiting termination signal...");
