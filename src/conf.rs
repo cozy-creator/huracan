@@ -1,8 +1,9 @@
 use crate::_prelude::*;
 
-use std::fs;
-
-use config::{Config, ConfigError, Environment, File, FileFormat};
+use figment::{
+    providers::{Env, Format, Yaml},
+    Figment,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,21 +116,12 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    fn new_from_content(content: &str) -> std::result::Result<Self, ConfigError> {
-        let x = Config::builder()
-            .add_source(File::from_str(content, FileFormat::Yaml))
-            .add_source(
-                Environment::with_prefix("APP")
-                    .separator("_")
-                    .list_separator(" "),
-            )
-            .build()?;
-        x.try_deserialize()
-    }
+    pub fn new() -> anyhow::Result<Self> {
+        let cfg = Figment::new()
+            .merge(Yaml::file("./config.yaml"))
+            .merge(Env::prefixed("APP_").split("_"))
+            .extract()?;
 
-    pub fn new() -> std::result::Result<Self, ConfigError> {
-        let default_config_str = fs::read_to_string("./config.yaml")
-            .map_err(|err| ConfigError::Message(err.to_string()))?;
-        Self::new_from_content(&default_config_str)
+        Ok(cfg)
     }
 }
