@@ -23,6 +23,7 @@ pub struct Loader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExtractedEvent {
     event: SuiEvent,
+    object_id: String,
 }
 
 impl SerializeMessage for ExtractedEvent {
@@ -123,8 +124,7 @@ impl Loader {
                     if let Ok(consumed) = consumed {
 
                         for event in consumed.items.clone() {
-                            info!("consumed a SUI event {:?}", serde_json::to_string_pretty(&event).unwrap());
-                            let _ = producer.send(event).await;
+                            let _ = producer.send(event).await; // we do not track individual pushes, only batch as a whole
                         }
 
                         if let Err(err) = producer.send_batch().await {
@@ -151,13 +151,23 @@ impl Loader {
 
 impl Extractor {
     pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> Self {
-        let (tx, rx) = bounded_ch(100);
+        let (tx, rx) = bounded_ch(cfg.buffer_size);
         Self {
             rx_term,
             tx,
             rx,
             cfg: cfg.clone(),
         }
+    }
+
+    fn map_event(event: SuiEvent) -> Option<ExtractedEvent> {
+        if let Some(object_id) = event.parsed_json.clone().get("object_id") {
+            return Some(ExtractedEvent {
+                event,
+                object_id: format!("{object_id}"),
+            });
+        }
+        None
     }
 
     pub async fn extract(self) -> Result<()> {
@@ -178,7 +188,9 @@ impl Extractor {
         loop {
             tokio::select! {
                 Some(event) = subscription.next() => {
-                    self.tx.send_async(ExtractedEvent { event: event? }).await.expect("always expected to send sui event for processing");
+                    if let Some(event) = Self::map_event(event?) {
+                        self.tx.send_async(event).await.expect("always expected to send sui event for processing");
+                    }
                 },
                 _ = rx_term.recv_async() => {
                     info!("Event consumer is terminating by a signal...");

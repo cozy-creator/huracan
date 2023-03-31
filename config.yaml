@@ -33,3 +33,5 @@ sui:
     ws: "wss://fullnode.devnet.sui.io:443"
   eventfilter:
     All: []
+  # buffer up to N events when reading event data(those events are consumed and pushed into pulsar, pushing runs in parallel with consumption)
+  buffersize: 1000
