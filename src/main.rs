@@ -3,14 +3,17 @@
 extern crate serde;
 
 mod _prelude;
+mod cli;
 mod conf;
 mod extractor;
 
 use crate::_prelude::*;
+use cli::SuiDataLoaderCli;
 use conf::AppConfig;
 use dotenv::dotenv;
 use extractor::{Extractor, Loader};
 
+use clap::Parser;
 use tracing_subscriber::filter::EnvFilter;
 
 fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
@@ -89,7 +92,10 @@ fn setup_signal_handler(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
-    let cfg = AppConfig::new()?;
+
+    let SuiDataLoaderCli::Start(args) = SuiDataLoaderCli::parse();
+
+    let cfg = AppConfig::new(args.config_path)?;
 
     setup_tracing(&cfg).context("cannot setup tracing")?;
 

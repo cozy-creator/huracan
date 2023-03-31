@@ -116,9 +116,9 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(path: Option<std::path::PathBuf>) -> anyhow::Result<Self> {
         let cfg = Figment::new()
-            .merge(Yaml::file("./config.yaml"))
+            .merge(Yaml::file(path.unwrap_or("./config.yaml".into())))
             .merge(Env::prefixed("APP_").split("_"))
             .extract()?;
 
