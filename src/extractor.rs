@@ -161,7 +161,8 @@ impl Extractor {
     }
 
     fn map_event(event: SuiEvent) -> Option<ExtractedEvent> {
-        if let Some(object_id) = event.parsed_json.clone().get("object_id") {
+        let object_id = &event.parsed_json.get("object_id").cloned();
+        if let Some(object_id) = object_id {
             return Some(ExtractedEvent {
                 event,
                 object_id: format!("{object_id}"),
