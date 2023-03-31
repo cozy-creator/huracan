@@ -38,7 +38,6 @@ impl SerializeMessage for ExtractedEvent {
 
 pub struct SUIExtractor {
     rx_term: Receiver<()>,
-    pub rx: Receiver<ExtractedEvent>,
 
     tx: Sender<ExtractedEvent>,
     cfg: SuiConfig,
@@ -93,7 +92,7 @@ impl PulsarLoader {
         Ok(producer)
     }
 
-    pub async fn load(self) -> Result<()> {
+    pub async fn go(self) -> Result<()> {
         let mut producer = self
             .create_pulsar_producer()
             .await
@@ -150,14 +149,16 @@ impl PulsarLoader {
 }
 
 impl SUIExtractor {
-    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> Self {
+    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> (Self, Receiver<ExtractedEvent>) {
         let (tx, rx) = bounded_ch(cfg.buffer_size);
-        Self {
-            rx_term,
-            tx,
+        (
+            Self {
+                rx_term,
+                tx,
+                cfg: cfg.clone(),
+            },
             rx,
-            cfg: cfg.clone(),
-        }
+        )
     }
 
     fn map_event(event: SuiEvent) -> Option<ExtractedEvent> {
@@ -171,14 +172,16 @@ impl SUIExtractor {
         None
     }
 
-    pub async fn extract(self) -> Result<()> {
+    pub async fn go(self) -> Result<()> {
         let sui = SuiClientBuilder::default()
             .ws_url(&self.cfg.api.ws)
             .build(&self.cfg.api.http)
             .await
             .context("cannot create sui client")?;
 
+        let mut skipped = 0;
         loop {
+            // todo: think about resubscription, some events will be missed and it's NOT okay
             let mut subscription = sui
                 .event_api()
                 .subscribe_event(self.cfg.event_filter.clone())
@@ -190,9 +193,15 @@ impl SUIExtractor {
                 tokio::select! {
                     item = subscription.next() => {
                         if let Some(event) = item {
-                            if let Some(event) = Self::map_event(event?) {
-                                debug!(object_id = event.object_id, event = serde_json::to_string_pretty(&event.event).expect("valid event"), "consumed SUI event");
+                            let event = event?; // todo: we cannot just quit on error here
+
+                            let pretty_event =  serde_json::to_string_pretty(&event).expect("valid event");
+                            if let Some(event) = Self::map_event(event) {
+                                debug!(object_id = event.object_id, event = pretty_event, "consumed SUI event");
                                 self.tx.send_async(event).await.expect("sends sui event for processing");
+                            } else {
+                                skipped += 1;
+                                debug!(skipped, event = pretty_event, "Skipped an event...")
                             }
                         } else {
                             info!("Subscription is exhausted, resubscribing...");

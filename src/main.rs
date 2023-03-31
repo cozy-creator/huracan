@@ -33,7 +33,7 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn setup_signal_handler(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
+fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
     let (tx_sig_term, rx_sig_term) = bounded_ch(0);
     let (tx_force_term, rx_force_term) = bounded_ch(0);
 
@@ -107,19 +107,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("{:#?}", &cfg);
     }
 
-    let (rx_term, rx_force_term) = setup_signal_handler(&cfg);
+    let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
 
-    let extractor = SUIExtractor::new(&cfg.sui, rx_term);
-    let loader = PulsarLoader::new(
-        &cfg.loader,
-        &cfg.pulsar,
-        extractor.rx.clone(),
-        rx_force_term,
-    );
+    let (extractor, rx) = SUIExtractor::new(&cfg.sui, rx_term);
+    let loader = PulsarLoader::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
 
-    let loader_task = tokio::task::spawn(async move { loader.load().await });
+    let loader_task = tokio::task::spawn(async move { loader.go().await });
 
-    extractor.extract().await?;
+    extractor.go().await?;
     loader_task
         .await
         .context("cannot execute loader")?
