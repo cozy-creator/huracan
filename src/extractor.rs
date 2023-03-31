@@ -9,8 +9,8 @@ use sui_sdk::rpc_types::SuiEvent;
 use sui_sdk::SuiClientBuilder;
 
 use pulsar::{
-    compression::*, producer, Authentication, Error as PulsarError, Pulsar, SerializeMessage,
-    TokioExecutor,
+    compression::*, producer, Authentication, Error as PulsarError, Producer, Pulsar,
+    SerializeMessage, TokioExecutor,
 };
 
 pub struct Loader {
@@ -58,7 +58,7 @@ impl Loader {
         }
     }
 
-    pub async fn load(&self) -> Result<()> {
+    async fn create_pulsar_producer(&self) -> Result<Producer<TokioExecutor>> {
         let mut builder = Pulsar::builder(&self.pulsar_cfg.uri, TokioExecutor);
 
         if let Some(token) = &self.pulsar_cfg.token {
@@ -70,7 +70,7 @@ impl Loader {
         }
 
         let pulsar: Pulsar<_> = builder.build().await?;
-        let mut producer = pulsar
+        let producer = pulsar
             .producer()
             .with_topic(&self.pulsar_cfg.topic)
             .with_name(&self.pulsar_cfg.producer)
@@ -87,6 +87,15 @@ impl Loader {
             .check_connection()
             .await
             .context("cannot check apache pulsar connection")?;
+
+        Ok(producer)
+    }
+
+    pub async fn load(&self) -> Result<()> {
+        let mut producer = self
+            .create_pulsar_producer()
+            .await
+            .context("cannot create pulsar producer")?;
 
         let opts = RelaBufConfig {
             soft_cap: self.cfg.batcher.soft_cap,
@@ -158,12 +167,9 @@ impl Extractor {
             .await
             .context("cannot create sui client")?;
 
-        let event_filter = serde_json::from_str(&self.cfg.event_filter)
-            .context("invalid event filter specified")?;
-
         let mut subscription = sui
             .event_api()
-            .subscribe_event(event_filter)
+            .subscribe_event(self.cfg.event_filter)
             .await
             .context("cannot subscribe to sui event stream")?;
 

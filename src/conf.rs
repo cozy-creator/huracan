@@ -56,7 +56,7 @@ pub struct SuiApiConfig {
 pub struct SuiConfig {
     pub api: SuiApiConfig,
     #[serde(alias = "eventfilter")]
-    pub event_filter: String,
+    pub event_filter: sui_sdk::rpc_types::EventFilter,
 }
 
 #[derive(Clone, Debug)]
