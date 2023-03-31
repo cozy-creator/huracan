@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 #[macro_use]
 extern crate serde;
 
@@ -11,7 +10,7 @@ use crate::_prelude::*;
 use cli::SuiDataLoaderCli;
 use conf::AppConfig;
 use dotenv::dotenv;
-use extractor::{Extractor, Loader};
+use extractor::{PulsarLoader, SUIExtractor};
 
 use clap::Parser;
 use tracing_subscriber::filter::EnvFilter;
@@ -109,10 +108,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (rx_term, rx_force_term) = setup_signal_handler(&cfg);
-    info!("Awaiting termination signal...");
 
-    let extractor = Extractor::new(&cfg.sui, rx_term);
-    let loader = Loader::new(
+    let extractor = SUIExtractor::new(&cfg.sui, rx_term);
+    let loader = PulsarLoader::new(
         &cfg.loader,
         &cfg.pulsar,
         extractor.rx.clone(),

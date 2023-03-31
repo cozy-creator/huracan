@@ -13,7 +13,7 @@ use pulsar::{
     SerializeMessage, TokioExecutor,
 };
 
-pub struct Loader {
+pub struct PulsarLoader {
     cfg: LoaderConfig,
     pulsar_cfg: PulsarConfig,
 
@@ -36,7 +36,7 @@ impl SerializeMessage for ExtractedEvent {
     }
 }
 
-pub struct Extractor {
+pub struct SUIExtractor {
     rx_term: Receiver<()>,
     pub rx: Receiver<ExtractedEvent>,
 
@@ -44,7 +44,7 @@ pub struct Extractor {
     cfg: SuiConfig,
 }
 
-impl Loader {
+impl PulsarLoader {
     pub fn new(
         cfg: &LoaderConfig,
         pulsar_cfg: &PulsarConfig,
@@ -92,7 +92,7 @@ impl Loader {
         Ok(producer)
     }
 
-    pub async fn load(&self) -> Result<()> {
+    pub async fn load(self) -> Result<()> {
         let mut producer = self
             .create_pulsar_producer()
             .await
@@ -108,9 +108,8 @@ impl Loader {
             }),
         };
 
-        let rx = self.rx.clone();
         let (buf, proxy) = RelaBuf::new(opts, move || {
-            let rx = rx.clone();
+            let rx = self.rx.clone();
             Box::pin(async move { rx.recv_async().await.context("cannot read") })
         });
 
@@ -138,7 +137,7 @@ impl Loader {
                     }
                 },
                 _ = rx_force_term.recv_async() => {
-                    info!("Event loader is terminating by a force signal...");
+                    info!("Event loader is terminated by a force signal...");
                     return Ok(())
                 },
             }
@@ -149,7 +148,7 @@ impl Loader {
     }
 }
 
-impl Extractor {
+impl SUIExtractor {
     pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> Self {
         let (tx, rx) = bounded_ch(cfg.buffer_size);
         Self {
@@ -185,7 +184,6 @@ impl Extractor {
             .context("cannot subscribe to sui event stream")?;
 
         info!("Starting event consumption...");
-        let rx_term = self.rx_term.clone();
         loop {
             tokio::select! {
                 Some(event) = subscription.next() => {
@@ -193,7 +191,7 @@ impl Extractor {
                         self.tx.send_async(event).await.expect("always expected to send sui event for processing");
                     }
                 },
-                _ = rx_term.recv_async() => {
+                _ = &mut self.rx_term.recv_async() => {
                     info!("Event consumer is terminating by a signal...");
                     break
                 },
