@@ -71,6 +71,7 @@ impl PulsarLoader {
         }
 
         let pulsar: Pulsar<_> = builder.build().await?;
+
         let producer = pulsar
             .producer()
             .with_topic(&self.pulsar_cfg.topic)
@@ -177,27 +178,33 @@ impl SUIExtractor {
             .await
             .context("cannot create sui client")?;
 
-        let mut subscription = sui
-            .event_api()
-            .subscribe_event(self.cfg.event_filter)
-            .await
-            .context("cannot subscribe to sui event stream")?;
-
-        info!("Starting event consumption...");
         loop {
-            tokio::select! {
-                Some(event) = subscription.next() => {
-                    if let Some(event) = Self::map_event(event?) {
-                        self.tx.send_async(event).await.expect("always expected to send sui event for processing");
-                    }
-                },
-                _ = &mut self.rx_term.recv_async() => {
-                    info!("Event consumer is terminating by a signal...");
-                    break
-                },
+            let mut subscription = sui
+                .event_api()
+                .subscribe_event(self.cfg.event_filter.clone())
+                .await
+                .context("cannot subscribe to sui event stream")?;
+
+            info!("Starting event consumption...");
+            loop {
+                tokio::select! {
+                    item = subscription.next() => {
+                        if let Some(event) = item {
+                            if let Some(event) = Self::map_event(event?) {
+                                debug!(object_id = event.object_id, event = serde_json::to_string_pretty(&event.event).expect("valid event"), "consumed SUI event");
+                                self.tx.send_async(event).await.expect("sends sui event for processing");
+                            }
+                        } else {
+                            info!("Subscription is exhausted, resubscribing...");
+                            break
+                        }
+                    },
+                    _ = &mut self.rx_term.recv_async() => {
+                        info!("Event consumer is terminating by a signal...");
+                        return Ok(())
+                    },
+                }
             }
         }
-
-        Ok(())
     }
 }
