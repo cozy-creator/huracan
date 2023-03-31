@@ -2,6 +2,7 @@ use crate::_prelude::*;
 
 use std::fs;
 
+use base64::Engine;
 use config::{Config, ConfigError, Environment, File, FileFormat};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -10,6 +11,7 @@ pub struct PulsarConfig {
     pub uri: String,
     pub topic: String,
     pub producer: String,
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -55,6 +57,21 @@ pub struct SuiConfig {
     pub api: SuiApiConfig,
     #[serde(alias = "eventfilter")]
     pub event_filter: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct CBase64(pub Vec<u8>);
+
+impl<'de> Deserialize<'de> for CBase64 {
+    fn deserialize<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<CBase64, D::Error> {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(s)
+            .map(CBase64)
+            .map_err(de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug)]

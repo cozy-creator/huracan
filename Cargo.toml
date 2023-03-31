@@ -12,6 +12,7 @@ humanize-rs = "0.1"
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 tracing-futures = "~0.2.5"
+base64 = "0.21.0"
 
 tokio = { version = "1.27.0", features = ["full"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "devnet-0.29.0" }
@@ -20,3 +21,4 @@ relabuf = "~0.16.0"
 
 serde_json = "1.0"
 serde = {version = "~1.0.125", features = ["derive"] }
+dotenv = "0.15.0"

@@ -8,6 +8,7 @@ mod extractor;
 
 use crate::_prelude::*;
 use conf::AppConfig;
+use dotenv::dotenv;
 use extractor::{Extractor, Loader};
 
 use tracing_subscriber::filter::EnvFilter;
@@ -87,6 +88,7 @@ fn setup_signal_handler(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
     let cfg = AppConfig::new()?;
 
     setup_tracing(&cfg).context("cannot setup tracing")?;

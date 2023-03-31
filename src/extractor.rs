@@ -9,7 +9,8 @@ use sui_sdk::rpc_types::SuiEvent;
 use sui_sdk::SuiClientBuilder;
 
 use pulsar::{
-    compression::*, producer, Error as PulsarError, Pulsar, SerializeMessage, TokioExecutor,
+    compression::*, producer, Authentication, Error as PulsarError, Pulsar, SerializeMessage,
+    TokioExecutor,
 };
 
 pub struct Loader {
@@ -58,9 +59,17 @@ impl Loader {
     }
 
     pub async fn load(&self) -> Result<()> {
-        let pulsar: Pulsar<_> = Pulsar::builder(&self.pulsar_cfg.uri, TokioExecutor)
-            .build()
-            .await?;
+        let mut builder = Pulsar::builder(&self.pulsar_cfg.uri, TokioExecutor);
+
+        if let Some(token) = &self.pulsar_cfg.token {
+            let auth = Authentication {
+                name: "token".to_string(),
+                data: token.clone().into_bytes(),
+            };
+            builder = builder.with_auth(auth);
+        }
+
+        let pulsar: Pulsar<_> = builder.build().await?;
         let mut producer = pulsar
             .producer()
             .with_topic(&self.pulsar_cfg.topic)
@@ -105,7 +114,7 @@ impl Loader {
                     if let Ok(consumed) = consumed {
 
                         for event in consumed.items.clone() {
-                            info!("consumed a SUI event {:?}", event);
+                            info!("consumed a SUI event {:?}", serde_json::to_string_pretty(&event).unwrap());
                             let _ = producer.send(event).await;
                         }
 
