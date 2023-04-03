@@ -4,13 +4,13 @@ extern crate serde;
 mod _prelude;
 mod cli;
 mod conf;
-mod extractor;
+mod event_loader;
 
 use crate::_prelude::*;
-use cli::SuiDataLoaderCli;
+use cli::{Args, Commands, LoadEventsArgs};
 use conf::AppConfig;
 use dotenv::dotenv;
-use extractor::{PulsarLoader, SUIExtractor};
+use event_loader::{PulsarLoader as PulsarEventLoader, SuiExtractor as SuiEventExtractor};
 
 use clap::Parser;
 use tracing_subscriber::filter::EnvFilter;
@@ -88,11 +88,31 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
     (rx_sig_term, rx_force_term)
 }
 
+async fn load_events(
+    cfg: &AppConfig,
+    _args: LoadEventsArgs,
+    rx_term: Receiver<()>,
+    rx_force_term: Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (extractor, rx) = SuiEventExtractor::new(&cfg.sui, rx_term);
+    let loader = PulsarEventLoader::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
+
+    let loader_task = tokio::task::spawn(async move { loader.go().await });
+
+    extractor.go().await?;
+    loader_task
+        .await
+        .context("cannot execute loader")?
+        .context("error returned from a loader")?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
-    let SuiDataLoaderCli::Start(args) = SuiDataLoaderCli::parse();
+    let args: Args = Args::parse();
 
     let cfg = AppConfig::new(args.config_path)?;
 
@@ -109,16 +129,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
 
-    let (extractor, rx) = SUIExtractor::new(&cfg.sui, rx_term);
-    let loader = PulsarLoader::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
-
-    let loader_task = tokio::task::spawn(async move { loader.go().await });
-
-    extractor.go().await?;
-    loader_task
-        .await
-        .context("cannot execute loader")?
-        .context("error returned from a loader")?;
+    match args.command {
+        Commands::LoadEvents(cmd) => load_events(&cfg, cmd, rx_term, rx_force_term).await,
+    }?;
 
     info!("Bye bye!");
 

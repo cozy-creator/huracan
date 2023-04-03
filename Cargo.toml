@@ -15,7 +15,7 @@ tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 tracing-futures = "~0.2.5"
 
 tokio = { version = "1.27.0", features = ["full"] }
-sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "devnet-0.29.0" }
+sui-sdk = { git = "https://github.com/MystenLabs/sui", branch = "testnet" }
 pulsar = "5.1"
 relabuf = "~0.16.0"
 

@@ -36,7 +36,7 @@ impl SerializeMessage for ExtractedEvent {
     }
 }
 
-pub struct SUIExtractor {
+pub struct SuiExtractor {
     rx_term: Receiver<()>,
 
     tx: Sender<ExtractedEvent>,
@@ -148,7 +148,7 @@ impl PulsarLoader {
     }
 }
 
-impl SUIExtractor {
+impl SuiExtractor {
     pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> (Self, Receiver<ExtractedEvent>) {
         let (tx, rx) = bounded_ch(cfg.buffer_size);
         (
