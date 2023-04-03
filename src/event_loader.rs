@@ -7,13 +7,14 @@ use anyhow::Result;
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::rpc_types::SuiEvent;
 use sui_sdk::SuiClientBuilder;
+use sui_types::base_types::ObjectID;
 
 use pulsar::{
-    compression::*, producer, Authentication, Error as PulsarError, Producer, Pulsar,
-    SerializeMessage, TokioExecutor,
+    compression::*, producer, Authentication, DeserializeMessage, Error as PulsarError, Producer,
+    Pulsar, SerializeMessage, TokioExecutor,
 };
 
-pub struct PulsarLoader {
+pub struct PulsarProducer {
     cfg: LoaderConfig,
     pulsar_cfg: PulsarConfig,
 
@@ -22,8 +23,8 @@ pub struct PulsarLoader {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExtractedEvent {
-    event: SuiEvent,
-    object_id: String,
+    pub event: SuiEvent,
+    pub object_id: ObjectID,
 }
 
 impl SerializeMessage for ExtractedEvent {
@@ -36,6 +37,17 @@ impl SerializeMessage for ExtractedEvent {
     }
 }
 
+impl DeserializeMessage for ExtractedEvent {
+    type Output = Result<Self>;
+
+    fn deserialize_message(payload: &pulsar::Payload) -> Self::Output {
+        Ok(
+            serde_json::from_slice(&payload.data)
+                .map_err(|e| PulsarError::Custom(e.to_string()))?,
+        )
+    }
+}
+
 pub struct SuiExtractor {
     rx_term: Receiver<()>,
 
@@ -43,7 +55,7 @@ pub struct SuiExtractor {
     cfg: SuiConfig,
 }
 
-impl PulsarLoader {
+impl PulsarProducer {
     pub fn new(
         cfg: &LoaderConfig,
         pulsar_cfg: &PulsarConfig,
@@ -73,8 +85,8 @@ impl PulsarLoader {
 
         let producer = pulsar
             .producer()
-            .with_topic(&self.pulsar_cfg.topic)
-            .with_name(&self.pulsar_cfg.producer)
+            .with_topic(&self.pulsar_cfg.events.topic)
+            .with_name(&self.pulsar_cfg.events.producer)
             .with_options(producer::ProducerOptions {
                 batch_size: Some(self.cfg.batcher.soft_cap as u32),
                 compression: Some(Compression::Snappy(CompressionSnappy::default())),
@@ -137,13 +149,13 @@ impl PulsarLoader {
                     }
                 },
                 _ = rx_force_term.recv_async() => {
-                    info!("Event loader is terminated by a force signal...");
+                    info!("Event producer is terminated by a force signal...");
                     return Ok(())
                 },
             }
         }
 
-        info!("Event loader is terminated normally...");
+        info!("Event producer is terminated normally...");
         Ok(())
     }
 }
@@ -161,15 +173,14 @@ impl SuiExtractor {
         )
     }
 
-    fn map_event(event: SuiEvent) -> Option<ExtractedEvent> {
+    fn map_event(event: SuiEvent) -> Result<Option<ExtractedEvent>> {
         let object_id = &event.parsed_json.get("object_id").cloned();
         if let Some(object_id) = object_id {
-            return Some(ExtractedEvent {
-                event,
-                object_id: format!("{object_id}"),
-            });
+            let object_id = ObjectID::from_hex_literal(&format!("{object_id}"))
+                .context("cannot read sui object id")?;
+            return Ok(Some(ExtractedEvent { event, object_id }));
         }
-        None
+        Ok(None)
     }
 
     pub async fn go(self) -> Result<()> {
@@ -196,8 +207,8 @@ impl SuiExtractor {
                             let event = event?; // todo: we cannot just quit on error here
 
                             let pretty_event =  serde_json::to_string_pretty(&event).expect("valid event");
-                            if let Some(event) = Self::map_event(event) {
-                                debug!(object_id = event.object_id, event = pretty_event, "consumed SUI event");
+                            if let Some(event) = Self::map_event(event)? {
+                                debug!(object_id = format!("{}", event.object_id), event = pretty_event, "consumed SUI event");
                                 self.tx.send_async(event).await.expect("sends sui event for processing");
                             } else {
                                 skipped += 1;
@@ -209,7 +220,7 @@ impl SuiExtractor {
                         }
                     },
                     _ = &mut self.rx_term.recv_async() => {
-                        info!("Event consumer is terminating by a signal...");
+                        info!("SUI event consumer is terminating by a signal...");
                         return Ok(())
                     },
                 }

@@ -5,12 +5,17 @@ mod _prelude;
 mod cli;
 mod conf;
 mod event_loader;
+mod object_loader;
 
 use crate::_prelude::*;
-use cli::{Args, Commands, LoadEventsArgs};
+use cli::{Args, Commands, LoadEventsArgs, LoadObjectsArgs};
 use conf::AppConfig;
 use dotenv::dotenv;
-use event_loader::{PulsarLoader as PulsarEventLoader, SuiExtractor as SuiEventExtractor};
+use event_loader::{PulsarProducer as PulsarEventProducer, SuiExtractor as SuiEventExtractor};
+use object_loader::{
+    ObjectFetcher as SuiObjectFetcher, ObjectProducer as PulsarObjectProducer,
+    PulsarConsumer as PulsarEventConsumer,
+};
 
 use clap::Parser;
 use tracing_subscriber::filter::EnvFilter;
@@ -95,15 +100,44 @@ async fn load_events(
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (extractor, rx) = SuiEventExtractor::new(&cfg.sui, rx_term);
-    let loader = PulsarEventLoader::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
+    let producer = PulsarEventProducer::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
 
-    let loader_task = tokio::task::spawn(async move { loader.go().await });
+    let producer_task = tokio::task::spawn(async move { producer.go().await });
 
     extractor.go().await?;
-    loader_task
+    producer_task
         .await
-        .context("cannot execute loader")?
-        .context("error returned from a loader")?;
+        .context("cannot execute producer")?
+        .context("error returned from a producer")?;
+
+    Ok(())
+}
+
+async fn load_objects(
+    cfg: &AppConfig,
+    _args: LoadObjectsArgs,
+    rx_term: Receiver<()>,
+    rx_force_term: Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (consumer, rx_events, tx_confirm) = PulsarEventConsumer::new(&cfg.pulsar, &rx_term);
+    let (fetcher, rx_enriched_events) =
+        SuiObjectFetcher::new(&cfg.loader, &cfg.sui, rx_events, &rx_force_term);
+    let producer = PulsarObjectProducer::new(rx_enriched_events, tx_confirm);
+
+    let fetcher_task = tokio::task::spawn(async move { fetcher.go().await });
+    let producer_task = tokio::task::spawn(async move { producer.go().await });
+
+    consumer.go().await?;
+
+    fetcher_task
+        .await
+        .context("cannot execute fetcher")?
+        .context("error returned from a fetcher")?;
+
+    producer_task
+        .await
+        .context("cannot execute producer")?
+        .context("error returned from a producer")?;
 
     Ok(())
 }
@@ -131,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::LoadEvents(cmd) => load_events(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::LoadObjects(cmd) => load_objects(&cfg, cmd, rx_term, rx_force_term).await,
     }?;
 
     info!("Bye bye!");

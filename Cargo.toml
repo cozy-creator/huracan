@@ -16,6 +16,7 @@ tracing-futures = "~0.2.5"
 
 tokio = { version = "1.27.0", features = ["full"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", branch = "testnet" }
+sui-types = { git = "https://github.com/MystenLabs/sui", branch = "testnet" }
 pulsar = "5.1"
 relabuf = "~0.16.0"
 

@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     LoadEvents(LoadEventsArgs),
+    LoadObjects(LoadObjectsArgs),
 }
 
 #[derive(Parser)]
@@ -19,5 +20,10 @@ pub struct Args {
 
 #[derive(Debug, clap::Args)]
 #[command(version, long_about = None)]
-#[command(about = "Starts SUI Data Loader")]
+#[command(about = "Starts SUI Event Loader")]
 pub struct LoadEventsArgs {}
+
+#[derive(Debug, clap::Args)]
+#[command(version, long_about = None)]
+#[command(about = "Starts SUI Object Loader")]
+pub struct LoadObjectsArgs {}

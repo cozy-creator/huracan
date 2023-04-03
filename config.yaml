@@ -24,8 +24,13 @@ loader:
 
 pulsar:
   uri: "pulsar+ssl://sui-devnet.o-mvqin.snio.cloud:6651"
-  topic: "sui-events"
-  producer: "my-producer"
+  events:
+    topic: "sui-events"
+    producer: "my-producer"
+    consumer: "my-consumer"
+  objects:
+    topic: "sui-events"
+    producer: "my-producer"
 
 sui:
   api:

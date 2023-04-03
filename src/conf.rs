@@ -7,11 +7,26 @@ use figment::{
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PulsarConfig {
-    pub uri: String,
+pub struct PulsarEventsConfig {
+    pub topic: String,
+    pub consumer: String,
+    pub producer: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PulsarObjectsConfig {
     pub topic: String,
     pub producer: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PulsarConfig {
+    pub uri: String,
     pub token: Option<String>,
+    pub events: PulsarEventsConfig,
+    pub objects: PulsarObjectsConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
