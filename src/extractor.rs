@@ -173,14 +173,14 @@ impl SUIExtractor {
     }
 
     pub async fn go(self) -> Result<()> {
-        let sui = SuiClientBuilder::default()
-            .ws_url(&self.cfg.api.ws)
-            .build(&self.cfg.api.http)
-            .await
-            .context("cannot create sui client")?;
-
         let mut skipped = 0;
         loop {
+            let sui = SuiClientBuilder::default()
+                .ws_url(&self.cfg.api.ws)
+                .build(&self.cfg.api.http)
+                .await
+                .context("cannot create sui client")?;
+
             // todo: think about resubscription, some events will be missed and it's NOT okay
             let mut subscription = sui
                 .event_api()
