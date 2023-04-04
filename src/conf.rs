@@ -11,11 +11,12 @@ pub struct PulsarEventsConfig {
     pub topic: String,
     pub consumer: String,
     pub producer: String,
+    pub subscription: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PulsarObjectsConfig {
+pub struct PulsarEnrichedEventsConfig {
     pub topic: String,
     pub producer: String,
 }
@@ -26,7 +27,8 @@ pub struct PulsarConfig {
     pub uri: String,
     pub token: Option<String>,
     pub events: PulsarEventsConfig,
-    pub objects: PulsarObjectsConfig,
+    #[serde(alias = "enrichedevents")]
+    pub enriched_events: PulsarEnrichedEventsConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]

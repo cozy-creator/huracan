@@ -2,7 +2,7 @@ log:
  # fancy some colors? - disable if redirect to file is intended
   ansi: true
   # base-line log level
-  level: debug
+  level: info
   # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
   # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
   #filter:
@@ -25,17 +25,18 @@ loader:
 pulsar:
   uri: "pulsar+ssl://sui-devnet.o-mvqin.snio.cloud:6651"
   events:
-    topic: "sui-events"
+    topic: "sui-events-2"
     producer: "my-producer"
     consumer: "my-consumer"
-  objects:
-    topic: "sui-events"
+    subscription: "my-sub"
+  enrichedevents:
+    topic: "sui-enriched-events"
     producer: "my-producer"
 
 sui:
   api:
-    http: "http://45.79.224.164:9000"
-    ws: "ws://45.79.224.164:9000"
+    http: "https://fullnode.devnet.sui.io:443"
+    ws: "wss://fullnode.devnet.sui.io:443"
   eventfilter:
     All: []
 # time range filter doesn't really seem to work with events subscription

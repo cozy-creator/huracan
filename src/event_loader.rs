@@ -1,26 +1,16 @@
 use {
     crate::_prelude::*,
     crate::conf::{LoaderConfig, PulsarConfig, SuiConfig},
+    crate::utils,
 };
 
 use anyhow::Result;
+use pulsar::{producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::rpc_types::SuiEvent;
 use sui_sdk::SuiClientBuilder;
 use sui_types::base_types::ObjectID;
 
-use pulsar::{
-    compression::*, producer, Authentication, DeserializeMessage, Error as PulsarError, Producer,
-    Pulsar, SerializeMessage, TokioExecutor,
-};
-
-pub struct PulsarProducer {
-    cfg: LoaderConfig,
-    pulsar_cfg: PulsarConfig,
-
-    rx: Receiver<ExtractedEvent>,
-    rx_force_term: Receiver<()>,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExtractedEvent {
     pub event: SuiEvent,
@@ -48,6 +38,14 @@ impl DeserializeMessage for ExtractedEvent {
     }
 }
 
+pub struct PulsarProducer {
+    cfg: LoaderConfig,
+    pulsar_cfg: PulsarConfig,
+
+    rx: Receiver<ExtractedEvent>,
+    rx_force_term: Receiver<()>,
+}
+
 pub struct SuiExtractor {
     rx_term: Receiver<()>,
 
@@ -70,45 +68,16 @@ impl PulsarProducer {
         }
     }
 
-    async fn create_pulsar_producer(&self) -> Result<Producer<TokioExecutor>> {
-        let mut builder = Pulsar::builder(&self.pulsar_cfg.uri, TokioExecutor);
-
-        if let Some(token) = &self.pulsar_cfg.token {
-            let auth = Authentication {
-                name: "token".to_string(),
-                data: token.clone().into_bytes(),
-            };
-            builder = builder.with_auth(auth);
-        }
-
-        let pulsar: Pulsar<_> = builder.build().await?;
-
-        let producer = pulsar
-            .producer()
-            .with_topic(&self.pulsar_cfg.events.topic)
-            .with_name(&self.pulsar_cfg.events.producer)
-            .with_options(producer::ProducerOptions {
-                batch_size: Some(self.cfg.batcher.soft_cap as u32),
-                compression: Some(Compression::Snappy(CompressionSnappy::default())),
-                ..Default::default()
-            })
-            .build()
-            .await
-            .context("cannot create apache pulsar producer")?;
-
-        producer
-            .check_connection()
-            .await
-            .context("cannot check apache pulsar connection")?;
-
-        Ok(producer)
-    }
-
     pub async fn go(self) -> Result<()> {
-        let mut producer = self
-            .create_pulsar_producer()
-            .await
-            .context("cannot create pulsar producer")?;
+        let mut producer = utils::create_pulsar_producer(&utils::PulsarProducerOptions {
+            uri: self.pulsar_cfg.uri,
+            topic: self.pulsar_cfg.events.topic,
+            producer: self.pulsar_cfg.events.producer,
+            token: self.pulsar_cfg.token,
+            batch_size: self.cfg.batcher.soft_cap as u32,
+        })
+        .await
+        .context("cannot create pulsar producer")?;
 
         let opts = RelaBufConfig {
             soft_cap: self.cfg.batcher.soft_cap,
@@ -142,6 +111,7 @@ impl PulsarProducer {
                             error!(error = format!("{err:?}"), "cannot send batch to pulsar");
                             consumed.return_on_err();
                         } else {
+                            info!(n = consumed.items.len(), "pushed events to pulsar...");
                             consumed.confirm();
                         }
                     } else {
@@ -176,8 +146,9 @@ impl SuiExtractor {
     fn map_event(event: SuiEvent) -> Result<Option<ExtractedEvent>> {
         let object_id = &event.parsed_json.get("object_id").cloned();
         if let Some(object_id) = object_id {
-            let object_id = ObjectID::from_hex_literal(&format!("{object_id}"))
-                .context("cannot read sui object id")?;
+            let object_id = format!("{object_id}");
+            let object_id = ObjectID::from_hex_literal(object_id.trim_matches('"'))
+                .context(format!("cannot read sui object id: {}", &object_id))?;
             return Ok(Some(ExtractedEvent { event, object_id }));
         }
         Ok(None)

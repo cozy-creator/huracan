@@ -1,37 +1,20 @@
 use {
     crate::_prelude::*,
     crate::conf::{LoaderConfig, PulsarConfig, SuiConfig},
+    crate::event_loader::ExtractedEvent,
+    crate::utils,
 };
 
 use anyhow::Result;
+use futures::TryStreamExt;
+use pulsar::{
+    message::proto::MessageIdData, producer, DeserializeMessage, Error as PulsarError,
+    SerializeMessage,
+};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::rpc_types::{SuiObjectData, SuiObjectDataOptions};
 use sui_sdk::SuiClientBuilder;
 
-use pulsar::{
-    consumer, message::proto::MessageIdData, producer, Authentication, Consumer,
-    DeserializeMessage, Error as PulsarError, Pulsar, SerializeMessage, TokioExecutor,
-};
-
-use crate::event_loader::ExtractedEvent;
-
-pub struct ObjectProducer {
-    _rx_produce: Receiver<EnrichedEvent>,
-    _tx_confirm: Sender<MessageIdData>,
-}
-
-impl ObjectProducer {
-    pub fn new(rx_produce: Receiver<EnrichedEvent>, tx_confirm: Sender<MessageIdData>) -> Self {
-        Self {
-            _rx_produce: rx_produce,
-            _tx_confirm: tx_confirm,
-        }
-    }
-
-    pub async fn go(self) -> Result<()> {
-        Ok(())
-    }
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnrichedEvent {
     pub event: ExtractedEvent,
@@ -59,11 +42,99 @@ impl DeserializeMessage for EnrichedEvent {
     }
 }
 
+pub struct ObjectProducer {
+    cfg: LoaderConfig,
+    pulsar_cfg: PulsarConfig,
+
+    rx_produce: Receiver<(EnrichedEvent, MessageIdData)>,
+    tx_confirm: Sender<MessageIdData>,
+    rx_force_term: Receiver<()>,
+}
+
+impl ObjectProducer {
+    pub fn new(
+        cfg: &LoaderConfig,
+        pulsar_cfg: &PulsarConfig,
+        rx_produce: Receiver<(EnrichedEvent, MessageIdData)>,
+        tx_confirm: Sender<MessageIdData>,
+        rx_force_term: &Receiver<()>,
+    ) -> Self {
+        Self {
+            cfg: cfg.clone(),
+            pulsar_cfg: pulsar_cfg.clone(),
+            rx_produce,
+            tx_confirm,
+            rx_force_term: rx_force_term.clone(),
+        }
+    }
+
+    pub async fn go(self) -> Result<()> {
+        let mut producer = utils::create_pulsar_producer(&utils::PulsarProducerOptions {
+            uri: self.pulsar_cfg.uri,
+            topic: self.pulsar_cfg.enriched_events.topic,
+            producer: self.pulsar_cfg.enriched_events.producer,
+            token: self.pulsar_cfg.token,
+            batch_size: self.cfg.batcher.soft_cap as u32,
+        })
+        .await
+        .context("cannot create pulsar producer")?;
+
+        let opts = RelaBufConfig {
+            soft_cap: self.cfg.batcher.soft_cap,
+            hard_cap: self.cfg.batcher.hard_cap,
+            release_after: *self.cfg.batcher.release_after,
+            backoff: Some(ExponentialBackoff {
+                max_elapsed_time: None,
+                ..ExponentialBackoff::default()
+            }),
+        };
+
+        let (buf, proxy) = RelaBuf::new(opts, move || {
+            let rx = self.rx_produce.clone();
+            Box::pin(async move { rx.recv_async().await.context("cannot read sui event") })
+        });
+
+        tokio::spawn(proxy.go());
+
+        loop {
+            tokio::select! {
+                consumed = buf.next() => {
+                    if let Ok(consumed) = consumed {
+                        for (ee, _) in consumed.items.clone() {
+                            let _ = producer.send(ee).await; // we do not track individual pushes, only batch as a whole
+                        }
+
+                        if let Err(err) = producer.send_batch().await {
+                            error!(error = format!("{err:?}"), "cannot send batch of enriched events to pulsar");
+                            consumed.return_on_err();
+                        } else {
+                            consumed.confirm();
+
+                            for (_, message_id) in consumed.items {
+                                let _ = self.tx_confirm.send_async(message_id).await;
+                            }
+                        }
+                    } else {
+                        break
+                    }
+                },
+
+                _ = &mut self.rx_force_term.recv_async() => {
+                    info!("Enriched event producer is terminated by a force signal...");
+                    return Ok(())
+                },
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub struct ObjectFetcher {
     cfg: LoaderConfig,
     sui_cfg: SuiConfig,
     rx_event: Receiver<(ExtractedEvent, MessageIdData)>,
-    _tx_produce: Sender<EnrichedEvent>,
+    tx_produce: Sender<(EnrichedEvent, MessageIdData)>,
     rx_force_term: Receiver<()>,
 }
 
@@ -73,14 +144,14 @@ impl ObjectFetcher {
         sui_cfg: &SuiConfig,
         rx_event: Receiver<(ExtractedEvent, MessageIdData)>,
         rx_force_term: &Receiver<()>,
-    ) -> (Self, Receiver<EnrichedEvent>) {
+    ) -> (Self, Receiver<(EnrichedEvent, MessageIdData)>) {
         let (tx_produce, rx_produce) = bounded_ch(100);
         (
             Self {
                 cfg: cfg.clone(),
                 sui_cfg: sui_cfg.clone(),
                 rx_event,
-                _tx_produce: tx_produce,
+                tx_produce,
                 rx_force_term: rx_force_term.clone(),
             },
             rx_produce,
@@ -89,7 +160,6 @@ impl ObjectFetcher {
 
     pub async fn go(self) -> Result<()> {
         let sui = SuiClientBuilder::default()
-            .ws_url(&self.sui_cfg.api.ws)
             .build(&self.sui_cfg.api.http)
             .await
             .context("cannot create sui client")?;
@@ -134,27 +204,27 @@ impl ObjectFetcher {
                             },
                             Ok(objects) => {
                                 let mut one_err = false;
-                                for res in objects {
-                                    if let Some(err) = res.error {
+                                for res in &objects {
+                                    if let Some(err) = &res.error {
                                         error!(error = format!("{err:?}"), "cannot fetch object data for one object");
                                         one_err = true;
                                         break
                                     }
                                 }
 
-                                /*let zip = consumed.items.iter().zip(objects.iter().map(|obj|obj.data));
-
-                                for res in zip {
-                                    self.tx_produce.send_async(EnrichedEvent{
-                                        event: zip.0,
-                                        object: zip.1,
-                                    }).await.expected("to always send enriched event");
-                                }*/
-
                                 if one_err {
                                     consumed.return_on_err();
                                 } else {
                                     consumed.confirm();
+
+                                    let zip = consumed.items.into_iter().zip(objects.into_iter().map(|obj|obj.data));
+
+                                    for ((event, message_id), object) in zip {
+                                        self.tx_produce.send_async((EnrichedEvent{
+                                            event,
+                                            object,
+                                        }, message_id)).await.expect("to always send enriched event");
+                                    }
                                 }
                             }
                         }
@@ -205,63 +275,39 @@ impl PulsarConsumer {
         )
     }
 
-    async fn create_pulsar_consumer(&self) -> Result<Consumer<ExtractedEvent, TokioExecutor>> {
-        let mut builder = Pulsar::builder(&self.pulsar_cfg.uri, TokioExecutor);
-
-        if let Some(token) = &self.pulsar_cfg.token {
-            let auth = Authentication {
-                name: "token".to_string(),
-                data: token.clone().into_bytes(),
-            };
-            builder = builder.with_auth(auth);
-        }
-
-        let pulsar: Pulsar<_> = builder.build().await?;
-
-        let mut consumer = pulsar
-            .consumer()
-            .with_topic(&self.pulsar_cfg.events.topic)
-            .with_consumer_name(&self.pulsar_cfg.events.consumer)
-            .with_options(consumer::ConsumerOptions {
-                durable: Some(true),
-                ..Default::default()
-            })
-            .build()
-            .await
-            .context("cannot create apache pulsar producer")?;
-
-        consumer
-            .check_connection()
-            .await
-            .context("cannot check apache pulsar connection")?;
-
-        Ok(consumer)
-    }
-
     pub async fn go(self) -> Result<()> {
-        let mut consumer = self
-            .create_pulsar_consumer()
+        let topic = self.pulsar_cfg.events.topic.clone();
+
+        let mut consumer =
+            utils::create_pulsar_consumer::<ExtractedEvent>(&utils::PulsarConsumerOptions {
+                uri: self.pulsar_cfg.uri,
+                topic: self.pulsar_cfg.events.topic,
+                consumer: self.pulsar_cfg.events.consumer,
+                subscription: self.pulsar_cfg.events.subscription,
+                token: self.pulsar_cfg.token,
+            })
             .await
             .context("cannot create pulsar producer")?;
 
         let rx_force_term = self.rx_force_term.clone();
 
+        info!("Starting to consume sui events...");
         loop {
             tokio::select! {
-                consumed = consumer.next() => {
-                    if let Some(Ok(consumed)) = consumed {
+                consumed = consumer.try_next() => {
+                    if let Ok(Some(consumed)) = consumed {
                         let message_id = consumed.message_id.id.clone();
                         let event = consumed.deserialize().context("cannot deserialize extracted sui event")?;
 
+                        info!(event = ?event, "working on event");
                         self.tx_event.send_async((event, message_id)).await.expect("to always be able to send an event");
                     } else {
                         break
                     }
                 },
                 id = self.rx_confirm.recv_async() => {
-                    if let Ok(id) = id {
-                        consumer.cumulative_ack_with_id(&self.pulsar_cfg.events.topic, id).await.context("cannot acknowledge message")?;
-                    }
+                    let id = id.expect("to be able to always read from confirmation channel");
+                    consumer.ack_with_id(&topic, id).await.context("cannot acknowledge message")?;
                 },
                 _ = rx_force_term.recv_async() => {
                     info!("Event consumer is terminated by a force signal...");

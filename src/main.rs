@@ -6,6 +6,7 @@ mod cli;
 mod conf;
 mod event_loader;
 mod object_loader;
+mod utils;
 
 use crate::_prelude::*;
 use cli::{Args, Commands, LoadEventsArgs, LoadObjectsArgs};
@@ -122,7 +123,13 @@ async fn load_objects(
     let (consumer, rx_events, tx_confirm) = PulsarEventConsumer::new(&cfg.pulsar, &rx_term);
     let (fetcher, rx_enriched_events) =
         SuiObjectFetcher::new(&cfg.loader, &cfg.sui, rx_events, &rx_force_term);
-    let producer = PulsarObjectProducer::new(rx_enriched_events, tx_confirm);
+    let producer = PulsarObjectProducer::new(
+        &cfg.loader,
+        &cfg.pulsar,
+        rx_enriched_events,
+        tx_confirm,
+        &rx_force_term,
+    );
 
     let fetcher_task = tokio::task::spawn(async move { fetcher.go().await });
     let producer_task = tokio::task::spawn(async move { producer.go().await });
