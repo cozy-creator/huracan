@@ -1,7 +1,7 @@
 use {
     crate::_prelude::*,
     crate::conf::{LoaderConfig, PulsarConfig, SuiConfig},
-    crate::event_loader::ExtractedObjectChange,
+    crate::object_changes_loader::ExtractedObjectChange,
     crate::utils,
 };
 
@@ -18,14 +18,14 @@ use sui_types::{base_types::ObjectID, error::SuiObjectResponseError};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnrichedObjectChange {
-    pub event: ExtractedObjectChange,
+    pub object_change: ExtractedObjectChange,
     pub object: Option<SuiObjectData>,
 }
 
 impl From<ExtractedObjectChange> for EnrichedObjectChange {
     fn from(value: ExtractedObjectChange) -> Self {
         Self {
-            event: value,
+            object_change: value,
             object: None,
         }
     }
@@ -101,7 +101,11 @@ impl ObjectProducer {
 
         let (buf, proxy) = RelaBuf::new(opts, move || {
             let rx = self.rx_produce.clone();
-            Box::pin(async move { rx.recv_async().await.context("cannot read sui event") })
+            Box::pin(async move {
+                rx.recv_async()
+                    .await
+                    .context("cannot read sui object change")
+            })
         });
 
         tokio::spawn(proxy.go());
@@ -111,12 +115,12 @@ impl ObjectProducer {
                 consumed = buf.next() => {
                     if let Ok(consumed) = consumed {
                         for (ee, _) in consumed.items.clone() {
-                            info!(event = ?ee, "sending enriched event to pulsar");
+                            info!(object_change = ?ee, "sending enriched object change to pulsar");
                             let _ = producer.send(ee).await; // we do not track individual pushes, only batch as a whole
                         }
 
                         if let Err(err) = producer.send_batch().await {
-                            error!(error = format!("{err:?}"), "cannot send batch of enriched events to pulsar");
+                            error!(error = format!("{err:?}"), "cannot send batch of enriched object changes to pulsar");
                             consumed.return_on_err();
                         } else {
                             consumed.confirm();
@@ -131,13 +135,13 @@ impl ObjectProducer {
                 },
 
                 _ = &mut self.rx_force_term.recv_async() => {
-                    info!("Enriched event producer is terminated by a force signal...");
+                    info!("Enriched object change producer is terminated by a force signal...");
                     return Ok(())
                 },
             }
         }
 
-        info!("Enriched event producer is going down...");
+        info!("Enriched object change producer is going down...");
         Ok(())
     }
 }
@@ -145,7 +149,7 @@ impl ObjectProducer {
 pub struct ObjectFetcher {
     cfg: LoaderConfig,
     sui_cfg: SuiConfig,
-    rx_event: Receiver<(ExtractedObjectChange, MessageIdData)>,
+    rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
     tx_produce: Sender<(EnrichedObjectChange, MessageIdData)>,
     rx_force_term: Receiver<()>,
 }
@@ -154,7 +158,7 @@ impl ObjectFetcher {
     pub fn new(
         cfg: &LoaderConfig,
         sui_cfg: &SuiConfig,
-        rx_event: Receiver<(ExtractedObjectChange, MessageIdData)>,
+        rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
         rx_force_term: &Receiver<()>,
     ) -> (Self, Receiver<(EnrichedObjectChange, MessageIdData)>) {
         let (tx_produce, rx_produce) = bounded_ch(100);
@@ -162,7 +166,7 @@ impl ObjectFetcher {
             Self {
                 cfg: cfg.clone(),
                 sui_cfg: sui_cfg.clone(),
-                rx_event,
+                rx_object_change,
                 tx_produce,
                 rx_force_term: rx_force_term.clone(),
             },
@@ -200,8 +204,12 @@ impl ObjectFetcher {
         };
 
         let (buf, proxy) = RelaBuf::new(opts, move || {
-            let rx = self.rx_event.clone();
-            Box::pin(async move { rx.recv_async().await.context("cannot read sui event") })
+            let rx = self.rx_object_change.clone();
+            Box::pin(async move {
+                rx.recv_async()
+                    .await
+                    .context("cannot read sui object change")
+            })
         });
 
         tokio::spawn(proxy.go());
@@ -242,7 +250,7 @@ impl ObjectFetcher {
                                         error!(error = format!("{err:?}"), "cannot fetch object data for one object");
                                         match err {
                                             SuiObjectResponseError::Deleted{ object_id, digest, version } => {
-                                                info!(object_id = ?object_id, version = ?version, digest = ?digest, object = ?obj.data, "object is in some further event, skipping for now");
+                                                info!(object_id = ?object_id, version = ?version, digest = ?digest, object = ?obj.data, "object is in some further object change, skipping for now");
                                                 continue;
                                             },
                                             _ => {
@@ -290,7 +298,7 @@ impl ObjectFetcher {
 
 pub struct PulsarConsumer {
     pulsar_cfg: PulsarConfig,
-    tx_event: Sender<(ExtractedObjectChange, MessageIdData)>,
+    tx_object_change: Sender<(ExtractedObjectChange, MessageIdData)>,
     rx_confirm: Receiver<MessageIdData>,
     rx_term: Receiver<()>,
 }
@@ -304,17 +312,17 @@ impl PulsarConsumer {
         Receiver<(ExtractedObjectChange, MessageIdData)>,
         Sender<MessageIdData>,
     ) {
-        let (tx_event, rx_event) = bounded_ch(100);
+        let (tx_object_change, rx_object_change) = bounded_ch(100);
         let (tx_confirm, rx_confirm) = bounded_ch(100);
 
         (
             Self {
                 pulsar_cfg: pulsar_cfg.clone(),
-                tx_event,
+                tx_object_change,
                 rx_confirm,
                 rx_term: rx_term.clone(),
             },
-            rx_event,
+            rx_object_change,
             tx_confirm,
         )
     }
@@ -335,22 +343,22 @@ impl PulsarConsumer {
 
         let rx_term = self.rx_term.clone();
 
-        info!("Starting to consume sui events...");
+        info!("Starting to consume sui object changes...");
         loop {
             tokio::select! {
                 consumed = &mut consumer.try_next() => {
                     if let Ok(Some(consumed)) = consumed {
                         let message_id = consumed.message_id.id.clone();
-                        let event = consumed.deserialize().context("cannot deserialize extracted sui event")?;
+                        let object_change = consumed.deserialize().context("cannot deserialize extracted sui object change")?;
 
-                        let _ = self.tx_event.send_async((event, message_id)).await;
+                        let _ = self.tx_object_change.send_async((object_change, message_id)).await;
                     } else {
                         break
                     }
                 },
                 id = &mut self.rx_confirm.recv_async() => {
                     let id = id.expect("to be able to always read from confirmation channel");
-                    info!(id = ?id, "acking event");
+                    info!(id = ?id, "acking object change");
                     consumer.ack_with_id(&topic, id).await.context("cannot acknowledge message")?;
                 },
                 _ = &mut rx_term.recv_async() => {

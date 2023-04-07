@@ -4,7 +4,7 @@ extern crate serde;
 mod _prelude;
 mod cli;
 mod conf;
-mod event_loader;
+mod object_changes_loader;
 mod object_loader;
 mod utils;
 
@@ -12,10 +12,12 @@ use crate::_prelude::*;
 use cli::{Args, Commands, LoadObjectChangesArgs, LoadObjectsArgs};
 use conf::AppConfig;
 use dotenv::dotenv;
-use event_loader::{PulsarProducer as PulsarEventProducer, SuiExtractor as SuiEventExtractor};
+use object_changes_loader::{
+    PulsarProducer as PulsarObjectChangeProducer, SuiExtractor as SuiObjectChangeExtractor,
+};
 use object_loader::{
     ObjectFetcher as SuiObjectFetcher, ObjectProducer as PulsarObjectProducer,
-    PulsarConsumer as PulsarEventConsumer,
+    PulsarConsumer as PulsarObjectChangeConsumer,
 };
 
 use clap::Parser;
@@ -63,7 +65,7 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
                         break
                     }
 
-                    warn!("Ctrl-C detected - stopping reading new events, awaiting graceful termination for {}s.", graceful_timeout.as_secs());
+                    warn!("Ctrl-C detected - stopping reading new object changes, awaiting graceful termination for {}s.", graceful_timeout.as_secs());
                     if let SigTerm::Instant(_) = &sig_term {
                         warn!("Ctrl-C detected while awaiting for graceful termination - switching to immediate shutdown mode");
                         break
@@ -94,14 +96,14 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
     (rx_sig_term, rx_force_term)
 }
 
-async fn load_events(
+async fn load_object_changes(
     cfg: &AppConfig,
     _args: LoadObjectChangesArgs,
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (extractor, rx) = SuiEventExtractor::new(&cfg.sui, rx_term);
-    let producer = PulsarEventProducer::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
+    let (extractor, rx) = SuiObjectChangeExtractor::new(&cfg.sui, rx_term);
+    let producer = PulsarObjectChangeProducer::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
 
     let producer_task = tokio::task::spawn(async move { producer.go().await });
 
@@ -120,7 +122,7 @@ async fn load_objects(
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (consumer, rx_events, tx_confirm) = PulsarEventConsumer::new(&cfg.pulsar, &rx_term);
+    let (consumer, rx_events, tx_confirm) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &rx_term);
     let (fetcher, rx_enriched_events) =
         SuiObjectFetcher::new(&cfg.loader, &cfg.sui, rx_events, &rx_force_term);
     let producer = PulsarObjectProducer::new(
@@ -171,7 +173,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
 
     match args.command {
-        Commands::LoadObjectChanges(cmd) => load_events(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::LoadObjectChanges(cmd) => {
+            load_object_changes(&cfg, cmd, rx_term, rx_force_term).await
+        }
         Commands::LoadObjects(cmd) => load_objects(&cfg, cmd, rx_term, rx_force_term).await,
     }?;
 
