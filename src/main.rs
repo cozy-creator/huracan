@@ -9,7 +9,7 @@ mod object_loader;
 mod utils;
 
 use crate::_prelude::*;
-use cli::{Args, Commands, LoadEventsArgs, LoadObjectsArgs};
+use cli::{Args, Commands, LoadObjectChangesArgs, LoadObjectsArgs};
 use conf::AppConfig;
 use dotenv::dotenv;
 use event_loader::{PulsarProducer as PulsarEventProducer, SuiExtractor as SuiEventExtractor};
@@ -96,7 +96,7 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
 
 async fn load_events(
     cfg: &AppConfig,
-    _args: LoadEventsArgs,
+    _args: LoadObjectChangesArgs,
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
 
     match args.command {
-        Commands::LoadEvents(cmd) => load_events(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::LoadObjectChanges(cmd) => load_events(&cfg, cmd, rx_term, rx_force_term).await,
         Commands::LoadObjects(cmd) => load_objects(&cfg, cmd, rx_term, rx_force_term).await,
     }?;
 

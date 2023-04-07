@@ -7,7 +7,7 @@ use figment::{
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PulsarEventsConfig {
+pub struct PulsarObjectChangesConfig {
     pub topic: String,
     pub consumer: String,
     pub producer: String,
@@ -16,7 +16,7 @@ pub struct PulsarEventsConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PulsarEnrichedEventsConfig {
+pub struct PulsarEnrichedObjectChangesConfig {
     pub topic: String,
     pub producer: String,
 }
@@ -26,9 +26,10 @@ pub struct PulsarEnrichedEventsConfig {
 pub struct PulsarConfig {
     pub uri: String,
     pub token: Option<String>,
-    pub events: PulsarEventsConfig,
-    #[serde(alias = "enrichedevents")]
-    pub enriched_events: PulsarEnrichedEventsConfig,
+    #[serde(alias = "objectchanges")]
+    pub object_changes: PulsarObjectChangesConfig,
+    #[serde(alias = "enrichedobjectchanges")]
+    pub enriched_object_changes: PulsarEnrichedObjectChangesConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -65,7 +66,6 @@ pub struct LogConfig {
 #[serde(deny_unknown_fields)]
 pub struct SuiApiConfig {
     pub http: String,
-    pub ws: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -73,9 +73,11 @@ pub struct SuiApiConfig {
 pub struct SuiConfig {
     pub api: SuiApiConfig,
     #[serde(alias = "eventfilter")]
-    pub event_filter: sui_sdk::rpc_types::EventFilter,
+    pub transaction_filter: Option<sui_types::query::TransactionFilter>,
     #[serde(alias = "buffersize")]
     pub buffer_size: usize,
+    #[serde(alias = "pagesize")]
+    pub page_size: usize,
 }
 
 #[derive(Clone, Debug)]

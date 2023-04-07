@@ -7,17 +7,19 @@ use {
 use anyhow::Result;
 use pulsar::{producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
-use sui_sdk::rpc_types::SuiEvent;
-use sui_sdk::SuiClientBuilder;
-use sui_types::base_types::ObjectID;
+use sui_sdk::{
+    rpc_types::{
+        ObjectChange, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
+    },
+    SuiClientBuilder,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ExtractedEvent {
-    pub event: SuiEvent,
-    pub object_id: ObjectID,
+pub struct ExtractedObjectChange {
+    pub change: ObjectChange,
 }
 
-impl SerializeMessage for ExtractedEvent {
+impl SerializeMessage for ExtractedObjectChange {
     fn serialize_message(input: Self) -> Result<producer::Message, PulsarError> {
         let payload = serde_json::to_vec(&input).map_err(|e| PulsarError::Custom(e.to_string()))?;
         Ok(producer::Message {
@@ -27,7 +29,7 @@ impl SerializeMessage for ExtractedEvent {
     }
 }
 
-impl DeserializeMessage for ExtractedEvent {
+impl DeserializeMessage for ExtractedObjectChange {
     type Output = Result<Self>;
 
     fn deserialize_message(payload: &pulsar::Payload) -> Self::Output {
@@ -42,14 +44,14 @@ pub struct PulsarProducer {
     cfg: LoaderConfig,
     pulsar_cfg: PulsarConfig,
 
-    rx: Receiver<ExtractedEvent>,
+    rx: Receiver<ExtractedObjectChange>,
     rx_force_term: Receiver<()>,
 }
 
 pub struct SuiExtractor {
     rx_term: Receiver<()>,
 
-    tx: Sender<ExtractedEvent>,
+    tx: Sender<ExtractedObjectChange>,
     cfg: SuiConfig,
 }
 
@@ -57,7 +59,7 @@ impl PulsarProducer {
     pub fn new(
         cfg: &LoaderConfig,
         pulsar_cfg: &PulsarConfig,
-        rx_extractor: Receiver<ExtractedEvent>,
+        rx_extractor: Receiver<ExtractedObjectChange>,
         rx_force_term: Receiver<()>,
     ) -> Self {
         Self {
@@ -71,8 +73,8 @@ impl PulsarProducer {
     pub async fn go(self) -> Result<()> {
         let mut producer = utils::create_pulsar_producer(&utils::PulsarProducerOptions {
             uri: self.pulsar_cfg.uri,
-            topic: self.pulsar_cfg.events.topic,
-            producer: self.pulsar_cfg.events.producer,
+            topic: self.pulsar_cfg.object_changes.topic,
+            producer: self.pulsar_cfg.object_changes.producer,
             token: self.pulsar_cfg.token,
             batch_size: self.cfg.batcher.soft_cap as u32,
         })
@@ -131,7 +133,7 @@ impl PulsarProducer {
 }
 
 impl SuiExtractor {
-    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> (Self, Receiver<ExtractedEvent>) {
+    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> (Self, Receiver<ExtractedObjectChange>) {
         let (tx, rx) = bounded_ch(cfg.buffer_size);
         (
             Self {
@@ -143,58 +145,70 @@ impl SuiExtractor {
         )
     }
 
-    fn map_event(event: SuiEvent) -> Result<Option<ExtractedEvent>> {
-        let object_id = &event.parsed_json.get("object_id").cloned();
-        if let Some(object_id) = object_id {
-            let object_id = format!("{object_id}");
-            let object_id = ObjectID::from_hex_literal(object_id.trim_matches('"'))
-                .context(format!("cannot read sui object id: {}", &object_id))?;
-            return Ok(Some(ExtractedEvent { event, object_id }));
-        }
-        Ok(None)
+    async fn handle_object_change(&self, change: ObjectChange) -> Result<()> {
+        let pretty_object_change =
+            serde_json::to_string_pretty(&change).expect("valid object change");
+
+        self.tx.send_async(ExtractedObjectChange { change }).await?;
+
+        debug!(change = ?pretty_object_change, "object change");
+
+        Ok(())
     }
 
     pub async fn go(self) -> Result<()> {
-        let mut skipped = 0;
+        let mut read_blocks = 0;
+        let mut read_object_changes = 0;
+
+        let sui = SuiClientBuilder::default()
+            .build(&self.cfg.api.http)
+            .await
+            .context("cannot create sui client")?;
+
+        let sui_read = sui.read_api();
+
+        let mut cursor = None;
+        let options = Some(SuiTransactionBlockResponseOptions {
+            show_input: false,
+            show_raw_input: false,
+            show_effects: false,
+            show_events: false,
+            show_object_changes: true,
+            show_balance_changes: false,
+        });
+        let query = SuiTransactionBlockResponseQuery {
+            filter: self.cfg.transaction_filter.clone(),
+            options,
+        };
+
+        info!("Reading object changes...");
         loop {
-            let sui = SuiClientBuilder::default()
-                .ws_url(&self.cfg.api.ws)
-                .build(&self.cfg.api.http)
-                .await
-                .context("cannot create sui client")?;
-
-            // todo: think about resubscription, some events will be missed and it's NOT okay
-            let mut subscription = sui
-                .event_api()
-                .subscribe_event(self.cfg.event_filter.clone())
-                .await
-                .context("cannot subscribe to sui event stream")?;
-
-            info!("Starting event consumption...");
-            loop {
-                tokio::select! {
-                    item = subscription.next() => {
-                        if let Some(event) = item {
-                            let event = event?; // todo: we cannot just quit on error here
-
-                            let pretty_event =  serde_json::to_string_pretty(&event).expect("valid event");
-                            if let Some(event) = Self::map_event(event)? {
-                                debug!(object_id = format!("{}", event.object_id), event = pretty_event, "consumed SUI event");
-                                self.tx.send_async(event).await.expect("sends sui event for processing");
-                            } else {
-                                skipped += 1;
-                                debug!(skipped, event = pretty_event, "Skipped an event...")
+            tokio::select! {
+                page = sui_read.query_transaction_blocks(query.clone(), cursor, Some(self.cfg.page_size), false) => {
+                    match page {
+                        Ok(page) => {
+                            cursor = page.next_cursor;
+                            for item in page.data {
+                                read_blocks += 1;
+                                if let Some(object_changes) = item.object_changes {
+                                    for change in object_changes {
+                                        read_object_changes += 1;
+                                        self.handle_object_change(change).await?;
+                                    }
+                                }
                             }
-                        } else {
-                            info!("Subscription is exhausted, resubscribing...");
-                            break
+
+                            info!(read_blocks, read_object_changes, "processed another page of transaction blocks");
+                        },
+                        Err(err) => {
+                            warn!(error = ?err, "There was an error reading object changes... retrying");
                         }
-                    },
-                    _ = &mut self.rx_term.recv_async() => {
-                        info!("SUI event consumer is terminating by a signal...");
-                        return Ok(())
-                    },
+                    }
                 }
+                _ = &mut self.rx_term.recv_async() => {
+                    info!("SUI event consumer is terminating by a signal...");
+                    return Ok(())
+                },
             }
         }
     }

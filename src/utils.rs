@@ -3,8 +3,8 @@ use crate::_prelude::*;
 use anyhow::Result;
 
 use pulsar::{
-    compression::*, producer, Authentication, Consumer, DeserializeMessage, Producer, Pulsar,
-    SubType, TokioExecutor,
+    compression::*, consumer::InitialPosition, producer, Authentication, Consumer, ConsumerOptions,
+    DeserializeMessage, Producer, Pulsar, SubType, TokioExecutor,
 };
 
 pub struct PulsarProducerOptions {
@@ -74,6 +74,10 @@ pub async fn create_pulsar_consumer<T: DeserializeMessage>(
         .with_consumer_name(&options.consumer)
         .with_subscription_type(SubType::Exclusive)
         .with_subscription(&options.subscription)
+        .with_options(ConsumerOptions {
+            initial_position: InitialPosition::Earliest,
+            ..ConsumerOptions::default()
+        })
         .build()
         .await
         .context("cannot create apache pulsar producer")?;
