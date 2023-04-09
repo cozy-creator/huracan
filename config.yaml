@@ -35,7 +35,7 @@ pulsar:
 
 sui:
   api:
-    http: "https://rpc-testnet.suiscan.xyz:443"
+    http: "http://45.79.224.164:9000"
   #transactionfilter:
   # buffer up to N events when reading event data(those events are consumed and pushed into pulsar, pushing runs in parallel with consumption)
   buffersize: 1000

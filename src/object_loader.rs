@@ -296,33 +296,21 @@ impl ObjectFetcher {
     }
 }
 
-pub struct PulsarConsumer {
+pub struct PulsarConfirmer {
     pulsar_cfg: PulsarConfig,
-    tx_object_change: Sender<(ExtractedObjectChange, MessageIdData)>,
     rx_confirm: Receiver<MessageIdData>,
     rx_term: Receiver<()>,
 }
 
-impl PulsarConsumer {
-    pub fn new(
-        pulsar_cfg: &PulsarConfig,
-        rx_term: &Receiver<()>,
-    ) -> (
-        Self,
-        Receiver<(ExtractedObjectChange, MessageIdData)>,
-        Sender<MessageIdData>,
-    ) {
-        let (tx_object_change, rx_object_change) = bounded_ch(100);
+impl PulsarConfirmer {
+    pub fn new(pulsar_cfg: &PulsarConfig, rx_term: &Receiver<()>) -> (Self, Sender<MessageIdData>) {
         let (tx_confirm, rx_confirm) = bounded_ch(100);
-
         (
             Self {
                 pulsar_cfg: pulsar_cfg.clone(),
-                tx_object_change,
                 rx_confirm,
                 rx_term: rx_term.clone(),
             },
-            rx_object_change,
             tx_confirm,
         )
     }
@@ -330,6 +318,63 @@ impl PulsarConsumer {
     pub async fn go(self) -> Result<()> {
         let topic = self.pulsar_cfg.object_changes.topic.clone();
 
+        let mut consumer =
+            utils::create_pulsar_consumer::<ExtractedObjectChange>(&utils::PulsarConsumerOptions {
+                uri: self.pulsar_cfg.uri,
+                topic: self.pulsar_cfg.object_changes.topic,
+                consumer: self.pulsar_cfg.object_changes.consumer,
+                subscription: self.pulsar_cfg.object_changes.subscription,
+                token: self.pulsar_cfg.token,
+            })
+            .await
+            .context("cannot create pulsar producer")?;
+
+        loop {
+            tokio::select! {
+                id = &mut self.rx_confirm.recv_async() => {
+                    if let Ok(id) = id {
+                        info!(id = ?id, "acking object change");
+                        consumer.ack_with_id(&topic, id).await.context("cannot acknowledge message")?;
+                    } else {
+                        break
+                    }
+                },
+                _ = &mut self.rx_term.recv_async() => {
+                    info!("Pulsar confirmer is terminated by a signal...");
+                    return Ok(())
+                },
+            }
+        }
+
+        info!("Pulsar confirmer is terminated normally...");
+        Ok(())
+    }
+}
+
+pub struct PulsarConsumer {
+    pulsar_cfg: PulsarConfig,
+    tx_object_change: Sender<(ExtractedObjectChange, MessageIdData)>,
+    rx_term: Receiver<()>,
+}
+
+impl PulsarConsumer {
+    pub fn new(
+        pulsar_cfg: &PulsarConfig,
+        rx_term: &Receiver<()>,
+    ) -> (Self, Receiver<(ExtractedObjectChange, MessageIdData)>) {
+        let (tx_object_change, rx_object_change) = bounded_ch(100);
+
+        (
+            Self {
+                pulsar_cfg: pulsar_cfg.clone(),
+                tx_object_change,
+                rx_term: rx_term.clone(),
+            },
+            rx_object_change,
+        )
+    }
+
+    pub async fn go(self) -> Result<()> {
         let mut consumer =
             utils::create_pulsar_consumer::<ExtractedObjectChange>(&utils::PulsarConsumerOptions {
                 uri: self.pulsar_cfg.uri,
@@ -355,11 +400,6 @@ impl PulsarConsumer {
                     } else {
                         break
                     }
-                },
-                id = &mut self.rx_confirm.recv_async() => {
-                    let id = id.expect("to be able to always read from confirmation channel");
-                    info!(id = ?id, "acking object change");
-                    consumer.ack_with_id(&topic, id).await.context("cannot acknowledge message")?;
                 },
                 _ = &mut rx_term.recv_async() => {
                     info!("Object changes consumer is terminated by a signal...");

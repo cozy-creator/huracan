@@ -17,7 +17,7 @@ use object_changes_loader::{
 };
 use object_loader::{
     ObjectFetcher as SuiObjectFetcher, ObjectProducer as PulsarObjectProducer,
-    PulsarConsumer as PulsarObjectChangeConsumer,
+    PulsarConfirmer as PulsarObjectChangeConfirmer, PulsarConsumer as PulsarObjectChangeConsumer,
 };
 
 use clap::Parser;
@@ -122,7 +122,8 @@ async fn load_objects(
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (consumer, rx_events, tx_confirm) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &rx_term);
+    let (consumer, rx_events) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &rx_term);
+    let (confirmer, tx_confirm) = PulsarObjectChangeConfirmer::new(&cfg.pulsar, &rx_force_term);
     let (fetcher, rx_enriched_events) =
         SuiObjectFetcher::new(&cfg.loader, &cfg.sui, rx_events, &rx_force_term);
     let producer = PulsarObjectProducer::new(
@@ -133,10 +134,16 @@ async fn load_objects(
         &rx_force_term,
     );
 
+    let confirmer_task = tokio::task::spawn(async move { confirmer.go().await });
     let fetcher_task = tokio::task::spawn(async move { fetcher.go().await });
     let producer_task = tokio::task::spawn(async move { producer.go().await });
 
     consumer.go().await?;
+
+    confirmer_task
+        .await
+        .context("cannot execute confirmer")?
+        .context("error returned from a confirmer")?;
 
     fetcher_task
         .await

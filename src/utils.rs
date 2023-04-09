@@ -72,7 +72,7 @@ pub async fn create_pulsar_consumer<T: DeserializeMessage>(
         .consumer()
         .with_topic(&options.topic)
         .with_consumer_name(&options.consumer)
-        .with_subscription_type(SubType::Exclusive)
+        .with_subscription_type(SubType::Shared)
         .with_subscription(&options.subscription)
         .with_options(ConsumerOptions {
             initial_position: InitialPosition::Earliest,
