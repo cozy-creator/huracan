@@ -12,9 +12,12 @@ use pulsar::{
     SerializeMessage,
 };
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
-use sui_sdk::rpc_types::{ObjectChange, SuiObjectData, SuiObjectDataOptions};
+use sui_sdk::rpc_types::{
+    ObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions,
+    SuiPastObjectResponse,
+};
 use sui_sdk::SuiClientBuilder;
-use sui_types::{base_types::ObjectID, error::SuiObjectResponseError};
+use sui_types::base_types::{ObjectID, VersionNumber};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnrichedObjectChange {
@@ -52,6 +55,12 @@ impl DeserializeMessage for EnrichedObjectChange {
     }
 }
 
+struct EnrichedObjectChangeInfo {
+    object_change: EnrichedObjectChange,
+    message_id: MessageIdData,
+    version: VersionNumber,
+    object_id: ObjectID,
+}
 pub struct ObjectProducer {
     cfg: LoaderConfig,
     pulsar_cfg: PulsarConfig,
@@ -174,13 +183,37 @@ impl ObjectFetcher {
         )
     }
 
-    fn map_object_change_to_object_id(
-        c: ExtractedObjectChange,
-    ) -> Option<(ObjectID, EnrichedObjectChange)> {
+    fn map(
+        c: &ExtractedObjectChange,
+        message_id: &MessageIdData,
+    ) -> Option<EnrichedObjectChangeInfo> {
         match c.change {
-            ObjectChange::Published { package_id, .. } => Some((package_id, c.into())),
-            ObjectChange::Created { object_id, .. } => Some((object_id, c.into())),
-            ObjectChange::Mutated { object_id, .. } => Some((object_id, c.into())),
+            ObjectChange::Published {
+                package_id,
+                version,
+                ..
+            } => Some(EnrichedObjectChangeInfo {
+                message_id: message_id.clone(),
+                object_id: package_id,
+                version,
+                object_change: c.clone().into(),
+            }),
+            ObjectChange::Created {
+                object_id, version, ..
+            } => Some(EnrichedObjectChangeInfo {
+                message_id: message_id.clone(),
+                object_id,
+                version,
+                object_change: c.clone().into(),
+            }),
+            ObjectChange::Mutated {
+                object_id, version, ..
+            } => Some(EnrichedObjectChangeInfo {
+                message_id: message_id.clone(),
+                object_id,
+                version,
+                object_change: c.clone().into(),
+            }),
             _ => None,
         }
     }
@@ -230,14 +263,16 @@ impl ObjectFetcher {
                     if let Ok(consumed) = consumed {
                         let mut objects_to_get = HashMap::new();
                         let mut objects_to_skip = Vec::new();
-                        for (c, message_id) in consumed.items.iter() {
-                            if let Some((object_id, c)) = Self::map_object_change_to_object_id(c.clone()) {
-                                objects_to_get.insert(object_id, (c, message_id.clone()));
+                        for (change, message_id) in consumed.items.iter() {
+                            if let Some(e) = Self::map(change, message_id) {
+                                objects_to_get.insert(e.object_id, e);
                             } else {
-                                objects_to_skip.push((c.clone().into(), message_id.clone()));
+                                objects_to_skip.push((change.clone().into(), message_id.clone()));
                             }
                         }
-                        match sui_read_api.multi_get_object_with_options(objects_to_get.keys().cloned().collect(), multi_get_object_options.clone()).await {
+
+                        let object_list = objects_to_get.values().map(|e|SuiGetPastObjectRequest{object_id: e.object_id, version: e.version}).collect();
+                        match sui_read_api.try_multi_get_parsed_past_object(object_list, multi_get_object_options.clone()).await {
                             Err(err) => {
                                 error!(error = format!("{err:?}"), "cannot fetch object data for one or more objects");
                                 consumed.return_on_err();
@@ -246,24 +281,30 @@ impl ObjectFetcher {
                                 let mut one_err = false;
 
                                 for obj in objects {
-                                    if let Some(err) = obj.error {
-                                        error!(error = format!("{err:?}"), "cannot fetch object data for one object");
-                                        match err {
-                                            SuiObjectResponseError::Deleted{ object_id, digest, version } => {
-                                                info!(object_id = ?object_id, version = ?version, digest = ?digest, object = ?obj.data, "object is in some further object change, skipping for now");
-                                                continue;
-                                            },
-                                            _ => {
-                                                error!(error = format!("{err:?}"), "cannot fetch object data for one object");
-                                                one_err = true;
-                                                break
-                                            }
+                                    match obj {
+                                        SuiPastObjectResponse::ObjectDeleted(o) => {
+                                            info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
+                                            continue
+                                        },
+                                        SuiPastObjectResponse::ObjectNotExists(object_id) => {
+                                            info!(object_id = ?object_id, "object doesn't exist");
+                                            one_err = true;
+                                            break
+                                        },
+                                        SuiPastObjectResponse::VersionNotFound(object_id, version) => {
+                                            info!(object_id = ?object_id, version = ?version, "object not found");
+                                            one_err = true;
+                                            break
                                         }
-                                    }
-
-                                    if let Some(data) = obj.data {
-                                        let entry = objects_to_get.get_mut(&data.object_id);
-                                        entry.unwrap().0.object = Some(data);
+                                        SuiPastObjectResponse::VersionTooHigh{object_id, asked_version, latest_version} => {
+                                            info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
+                                            one_err = true;
+                                            break
+                                        }
+                                        SuiPastObjectResponse::VersionFound(obj) => {
+                                            let entry = objects_to_get.get_mut(&obj.object_id);
+                                            entry.unwrap().object_change.object = Some(obj);
+                                        }
                                     }
                                 }
 
@@ -272,7 +313,7 @@ impl ObjectFetcher {
                                 } else {
                                     consumed.confirm();
                                     for (_, c) in objects_to_get {
-                                        let _ = self.tx_produce.send_async(c).await;
+                                        let _ = self.tx_produce.send_async((c.object_change, c.message_id)).await;
                                     }
                                     for c in objects_to_skip {
                                         let _ = self.tx_produce.send_async(c).await;
