@@ -170,7 +170,7 @@ impl ObjectFetcher {
         rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
         rx_force_term: &Receiver<()>,
     ) -> (Self, Receiver<(EnrichedObjectChange, MessageIdData)>) {
-        let (tx_produce, rx_produce) = bounded_ch(100);
+        let (tx_produce, rx_produce) = bounded_ch(cfg.buffer_size);
         (
             Self {
                 cfg: cfg.clone(),
@@ -344,8 +344,12 @@ pub struct PulsarConfirmer {
 }
 
 impl PulsarConfirmer {
-    pub fn new(pulsar_cfg: &PulsarConfig, rx_term: &Receiver<()>) -> (Self, Sender<MessageIdData>) {
-        let (tx_confirm, rx_confirm) = bounded_ch(100);
+    pub fn new(
+        pulsar_cfg: &PulsarConfig,
+        loader_cfg: &LoaderConfig,
+        rx_term: &Receiver<()>,
+    ) -> (Self, Sender<MessageIdData>) {
+        let (tx_confirm, rx_confirm) = bounded_ch(loader_cfg.buffer_size);
         (
             Self {
                 pulsar_cfg: pulsar_cfg.clone(),
@@ -401,9 +405,10 @@ pub struct PulsarConsumer {
 impl PulsarConsumer {
     pub fn new(
         pulsar_cfg: &PulsarConfig,
+        loader_cfg: &LoaderConfig,
         rx_term: &Receiver<()>,
     ) -> (Self, Receiver<(ExtractedObjectChange, MessageIdData)>) {
-        let (tx_object_change, rx_object_change) = bounded_ch(100);
+        let (tx_object_change, rx_object_change) = bounded_ch(loader_cfg.buffer_size);
 
         (
             Self {

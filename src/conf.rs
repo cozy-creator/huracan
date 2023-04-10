@@ -36,6 +36,8 @@ pub struct PulsarConfig {
 #[serde(deny_unknown_fields)]
 pub struct LoaderConfig {
     pub batcher: BatchingConfig,
+    #[serde(alias = "buffersize")]
+    pub buffer_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -74,8 +76,6 @@ pub struct SuiConfig {
     pub api: SuiApiConfig,
     #[serde(alias = "eventfilter")]
     pub transaction_filter: Option<sui_types::query::TransactionFilter>,
-    #[serde(alias = "buffersize")]
-    pub buffer_size: usize,
     #[serde(alias = "pagesize")]
     pub page_size: usize,
 }

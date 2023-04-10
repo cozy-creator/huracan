@@ -102,7 +102,7 @@ async fn load_object_changes(
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (extractor, rx) = SuiObjectChangeExtractor::new(&cfg.sui, rx_term);
+    let (extractor, rx) = SuiObjectChangeExtractor::new(&cfg.sui, &cfg.loader, rx_term);
     let producer = PulsarObjectChangeProducer::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
 
     let producer_task = tokio::task::spawn(async move { producer.go().await });
@@ -122,8 +122,9 @@ async fn load_objects(
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (consumer, rx_events) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &rx_term);
-    let (confirmer, tx_confirm) = PulsarObjectChangeConfirmer::new(&cfg.pulsar, &rx_force_term);
+    let (consumer, rx_events) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
+    let (confirmer, tx_confirm) =
+        PulsarObjectChangeConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
     let (fetcher, rx_enriched_events) =
         SuiObjectFetcher::new(&cfg.loader, &cfg.sui, rx_events, &rx_force_term);
     let producer = PulsarObjectProducer::new(

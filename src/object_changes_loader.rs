@@ -133,8 +133,12 @@ impl PulsarProducer {
 }
 
 impl SuiExtractor {
-    pub fn new(cfg: &SuiConfig, rx_term: Receiver<()>) -> (Self, Receiver<ExtractedObjectChange>) {
-        let (tx, rx) = bounded_ch(cfg.buffer_size);
+    pub fn new(
+        cfg: &SuiConfig,
+        loader_cfg: &LoaderConfig,
+        rx_term: Receiver<()>,
+    ) -> (Self, Receiver<ExtractedObjectChange>) {
+        let (tx, rx) = bounded_ch(loader_cfg.buffer_size);
         (
             Self {
                 rx_term,
