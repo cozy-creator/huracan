@@ -1,7 +1,7 @@
 use {
     crate::_prelude::*,
     crate::conf::{LoaderConfig, PulsarConfig, SuiConfig},
-    crate::object_changes_loader::ExtractedObjectChange,
+    crate::extractor::ExtractedObjectChange,
     crate::utils,
 };
 

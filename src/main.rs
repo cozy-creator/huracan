@@ -4,18 +4,18 @@ extern crate serde;
 mod _prelude;
 mod cli;
 mod conf;
-mod object_changes_loader;
-mod object_loader;
+mod extractor;
+mod transformer;
 mod utils;
 
 use crate::_prelude::*;
-use cli::{Args, Commands, LoadObjectChangesArgs, LoadObjectsArgs};
+use cli::{Args, Commands, ExtractArgs, LoadArgs, TransformArgs};
 use conf::AppConfig;
 use dotenv::dotenv;
-use object_changes_loader::{
+use extractor::{
     PulsarProducer as PulsarObjectChangeProducer, SuiExtractor as SuiObjectChangeExtractor,
 };
-use object_loader::{
+use transformer::{
     ObjectFetcher as SuiObjectFetcher, ObjectProducer as PulsarObjectProducer,
     PulsarConfirmer as PulsarObjectChangeConfirmer, PulsarConsumer as PulsarObjectChangeConsumer,
 };
@@ -96,9 +96,9 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
     (rx_sig_term, rx_force_term)
 }
 
-async fn load_object_changes(
+async fn extract(
     cfg: &AppConfig,
-    _args: LoadObjectChangesArgs,
+    _args: ExtractArgs,
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -116,9 +116,9 @@ async fn load_object_changes(
     Ok(())
 }
 
-async fn load_objects(
+async fn transform(
     cfg: &AppConfig,
-    _args: LoadObjectsArgs,
+    _args: TransformArgs,
     rx_term: Receiver<()>,
     rx_force_term: Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -159,6 +159,15 @@ async fn load_objects(
     Ok(())
 }
 
+async fn load(
+    _cfg: &AppConfig,
+    _args: LoadArgs,
+    _rx_term: Receiver<()>,
+    _rx_force_term: Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
@@ -181,10 +190,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
 
     match args.command {
-        Commands::LoadObjectChanges(cmd) => {
-            load_object_changes(&cfg, cmd, rx_term, rx_force_term).await
-        }
-        Commands::LoadObjects(cmd) => load_objects(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::Extract(cmd) => extract(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::Transform(cmd) => transform(&cfg, cmd, rx_term, rx_force_term).await,
+        Commands::Load(cmd) => load(&cfg, cmd, rx_term, rx_force_term).await,
     }?;
 
     info!("Bye bye!");

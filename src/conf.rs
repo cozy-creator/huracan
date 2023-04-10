@@ -18,7 +18,15 @@ pub struct PulsarObjectChangesConfig {
 #[serde(deny_unknown_fields)]
 pub struct PulsarEnrichedObjectChangesConfig {
     pub topic: String,
+    pub consumer: String,
     pub producer: String,
+    pub subscription: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MongoConfig {
+    pub uri: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -130,6 +138,7 @@ pub struct AppConfig {
     pub shutdown: ShutdownConfig,
     pub loader: LoaderConfig,
     pub pulsar: PulsarConfig,
+    pub mongo: MongoConfig,
 
     pub sui: SuiConfig,
 }

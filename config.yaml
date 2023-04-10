@@ -12,7 +12,7 @@ shutdown:
   timeout: 10s
 
 loader:
-  # we batch data before sending it to Apache Pulsar
+  # we batch data before sending it to Apache Pulsar / SUI API
   batcher:
     # send batch as soon as reach a soft_cap of buffered events
     softcap: 30
@@ -21,6 +21,8 @@ loader:
     # unconditionally send batch after specified period of time even if soft_cap isn't quite reached yet
     # prevents starvation adhering to some minimal latency when loader is starving for data
     releaseafter: 500ms
+  # internal buffer size for channels
+  buffersize: 1000
 
 pulsar:
   uri: "pulsar+ssl://sui-devnet.o-mvqin.snio.cloud:6651"
@@ -32,11 +34,14 @@ pulsar:
   enrichedobjectchanges:
     topic: "sui-enriched-object-changes"
     producer: "my-producer"
+    consumer: "my-consumer"
+    subscription: "my-sub"
+
+mongo:
+  uri: ""
 
 sui:
   api:
     http: "http://45.79.224.164:9000"
   #transactionfilter:
-  # buffer up to N events when reading event data(those events are consumed and pushed into pulsar, pushing runs in parallel with consumption)
-  buffersize: 1000
   pagesize: 100

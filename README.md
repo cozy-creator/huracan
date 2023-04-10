@@ -4,9 +4,15 @@ Reads events from SUI RPC and pushes them into Apache Pulsar
 - for now only subscription is supported
 - events are batched before writing to pulsar
 
-## Modes
- - Object change loader: `cargo run -- load-object-changes --config ./config.yaml --print-config`
- - Object loader/enricher: `cargo run -- load-objects --config ./config.yaml --print-config`
+## Use
+ - Extract: `cargo run -- extract --config ./config.yaml --print-config`
+    Pulls for object changes via SUI RPC and pushes into Pulsar
+
+ - Transform: `cargo run -- transform --config ./config.yaml --print-config`
+    Reads from Pulsar, enriches with object data via SUI RPC and pushes into Pulsar
+
+ - Load: `cargo run -- load --config ./config.yaml --print-config`
+    Reads from Pulsar and writes to Mongo
 
 ## Development
 - clone repo

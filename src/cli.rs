@@ -2,8 +2,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    LoadObjectChanges(LoadObjectChangesArgs),
-    LoadObjects(LoadObjectsArgs),
+    Extract(ExtractArgs),
+    Transform(TransformArgs),
+    Load(LoadArgs),
 }
 
 #[derive(Parser)]
@@ -20,10 +21,17 @@ pub struct Args {
 
 #[derive(Debug, clap::Args)]
 #[command(version, long_about = None)]
-#[command(about = "Starts SUI Event Loader")]
-pub struct LoadObjectChangesArgs {}
+#[command(about = "Starts extractor - extract object changes via SUI API and submit to Pulsar")]
+pub struct ExtractArgs {}
 
 #[derive(Debug, clap::Args)]
 #[command(version, long_about = None)]
-#[command(about = "Starts SUI Object Loader")]
-pub struct LoadObjectsArgs {}
+#[command(
+    about = "Starts transformer - read from Pulsar enrich with object data and submit to Pulsar"
+)]
+pub struct TransformArgs {}
+
+#[derive(Debug, clap::Args)]
+#[command(version, long_about = None)]
+#[command(about = "Starts loader - read transformed entities from Pulsar and write to Mongo")]
+pub struct LoadArgs {}
