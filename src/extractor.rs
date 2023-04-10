@@ -40,7 +40,7 @@ pub struct PulsarProducer {
 	rx_force_term: Receiver<()>,
 }
 
-pub struct SuiExtractor {
+pub struct Extractor {
 	rx_term: Receiver<()>,
 
 	tx:  Sender<ExtractedObjectChange>,
@@ -116,7 +116,7 @@ impl PulsarProducer {
 	}
 }
 
-impl SuiExtractor {
+impl Extractor {
 	pub fn new(
 		cfg: &SuiConfig,
 		loader_cfg: &LoaderConfig,

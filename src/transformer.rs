@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures::TryStreamExt;
 use pulsar::{message::proto::MessageIdData, producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::{
@@ -135,7 +134,7 @@ impl ObjectProducer {
 	}
 }
 
-pub struct ObjectFetcher {
+pub struct Transformer {
 	cfg:              LoaderConfig,
 	sui_cfg:          SuiConfig,
 	rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
@@ -143,7 +142,7 @@ pub struct ObjectFetcher {
 	rx_force_term:    Receiver<()>,
 }
 
-impl ObjectFetcher {
+impl Transformer {
 	pub fn new(
 		cfg: &LoaderConfig,
 		sui_cfg: &SuiConfig,
@@ -323,8 +322,7 @@ impl PulsarConfirmer {
 			subscription: self.pulsar_cfg.object_changes.subscription,
 			token:        self.pulsar_cfg.token,
 		})
-		.await
-		.context("cannot create pulsar producer")?;
+		.await?;
 
 		loop {
 			tokio::select! {
@@ -373,8 +371,7 @@ impl PulsarConsumer {
 			subscription: self.pulsar_cfg.object_changes.subscription,
 			token:        self.pulsar_cfg.token,
 		})
-		.await
-		.context("cannot create pulsar producer")?;
+		.await?;
 
 		let rx_term = self.rx_term.clone();
 
