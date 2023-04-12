@@ -15,11 +15,13 @@ tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 tracing-futures = "~0.2.5"
 
 tokio = { version = "1.27.0", features = ["full"] }
-sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.30.0" }
-sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.30.0" }
+sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.31.0" }
+sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.31.0" }
 pulsar = "5.1"
+mongodb = "2.3.0"
 relabuf = "~0.16.0"
 
 serde_json = "1.0"
 serde = {version = "~1.0.125", features = ["derive"] }
 dotenv = "0.15.0"
+bson = "2.6.1"

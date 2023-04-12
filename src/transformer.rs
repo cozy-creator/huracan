@@ -163,7 +163,7 @@ impl Transformer {
 	}
 
 	fn map(c: &ExtractedObjectChange, message_id: &MessageIdData) -> Option<EnrichedObjectChangeInfo> {
-		match c.change {
+		match c.change.clone() {
 			ObjectChange::Published { package_id, version, .. } => Some(EnrichedObjectChangeInfo {
 				message_id: message_id.clone(),
 				object_id: package_id,
@@ -182,6 +182,11 @@ impl Transformer {
 				version,
 				object_change: c.clone().into(),
 			}),
+			ObjectChange::Wrapped { object_id, object_type, .. } => {
+				warn!(object_id = ?object_id, object_type = ?object_type, "wrapped!");
+				None
+			}
+
 			_ => None,
 		}
 	}

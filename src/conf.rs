@@ -25,8 +25,16 @@ pub struct PulsarEnrichedObjectChangesConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MongoObjectsConfig {
+	pub collection: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MongoConfig {
-	pub uri: String,
+	pub uri:      String,
+	pub database: String,
+	pub objects:  MongoObjectsConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]

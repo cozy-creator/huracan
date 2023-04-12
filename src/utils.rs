@@ -68,7 +68,7 @@ pub async fn create_pulsar_consumer<T: DeserializeMessage>(
 		.with_options(ConsumerOptions { initial_position: InitialPosition::Earliest, ..ConsumerOptions::default() })
 		.build()
 		.await
-		.context("cannot create apache pulsar producer")?;
+		.context("cannot create apache pulsar consumer")?;
 
 	consumer.check_connection().await.context("cannot check apache pulsar connection")?;
 

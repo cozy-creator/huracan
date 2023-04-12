@@ -38,10 +38,13 @@ pulsar:
     subscription: "my-sub"
 
 mongo:
-  uri: ""
+  uri: "mongodb+srv://sui-devnet.gpf3cd1.mongodb.net/"
+  database: "sui"
+  objects:
+    collection: "objects"
 
 sui:
   api:
-    http: "http://45.79.224.164:9000"
+    http: "https://rpc-testnet.suiscan.xyz:443"
   #transactionfilter:
   pagesize: 100
