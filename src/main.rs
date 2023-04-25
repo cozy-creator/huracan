@@ -49,7 +49,7 @@ fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
 		Instant(Instant),
 	}
 
-	tokio::task::spawn(async move {
+	tokio::spawn(async move {
 		let mut sig_term = SigTerm::Tx(tx_sig_term);
 
 		loop {
@@ -102,14 +102,13 @@ async fn extract(
 	rx_term: Receiver<()>,
 	rx_force_term: Receiver<()>,
 ) -> anyhow::Result<()> {
-	let (extractor, rx) = Extractor::new(&cfg.sui, &cfg.loader, rx_term);
-	let producer = PulsarObjectChangeProducer::new(&cfg.loader, &cfg.pulsar, rx, rx_force_term);
+	let (extractor, rx_sui_changes) = Extractor::new(&cfg.sui, &cfg.loader, rx_term);
+	let producer = PulsarObjectChangeProducer::new(&cfg.loader, &cfg.pulsar, rx_sui_changes, rx_force_term);
 
-	let extractor_task = tokio::task::spawn(async move { extractor.go().await });
-	let producer_task = tokio::task::spawn(async move { producer.go().await });
-
-	extractor_task.await.context("cannot execute extractor")?.context("error returned from a extractor")?;
-	producer_task.await.context("cannot execute producer")?.context("error returned from a producer")?;
+	tokio::try_join!(
+		tokio::spawn(async move { extractor.go().await }),
+		tokio::spawn(async move { producer.go().await }),
+	)?;
 
 	Ok(())
 }
@@ -120,20 +119,18 @@ async fn transform(
 	rx_term: Receiver<()>,
 	rx_force_term: Receiver<()>,
 ) -> anyhow::Result<()> {
-	let (consumer, rx) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
-	let (confirmer, tx_confirm) = PulsarObjectChangeConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
-	let (fetcher, rx_enriched_events) = Transformer::new(&cfg.loader, &cfg.sui, rx, &rx_force_term);
-	let producer = PulsarObjectProducer::new(&cfg.loader, &cfg.pulsar, rx_enriched_events, tx_confirm, &rx_force_term);
+	let (consumer, rx_pulsar_changes) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
+	let (confirmer, tx_pulsar_acks) = PulsarObjectChangeConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
+	let (fetcher, rx_enriched_events) = Transformer::new(&cfg.loader, &cfg.sui, rx_pulsar_changes, &rx_force_term);
+	let producer =
+		PulsarObjectProducer::new(&cfg.loader, &cfg.pulsar, rx_enriched_events, tx_pulsar_acks, &rx_force_term);
 
-	let consumer_task = tokio::task::spawn(async move { consumer.go().await });
-	let confirmer_task = tokio::task::spawn(async move { confirmer.go().await });
-	let fetcher_task = tokio::task::spawn(async move { fetcher.go().await });
-	let producer_task = tokio::task::spawn(async move { producer.go().await });
-
-	consumer_task.await.context("cannot execute consumer")?.context("error returned from consumer")?;
-	confirmer_task.await.context("cannot execute confirmer")?.context("error returned from confirmer")?;
-	fetcher_task.await.context("cannot execute fetcher")?.context("error returned from fetcher")?;
-	producer_task.await.context("cannot execute producer")?.context("error returned from producer")?;
+	tokio::try_join!(
+		tokio::spawn(async move { consumer.go().await }),
+		tokio::spawn(async move { confirmer.go().await }),
+		tokio::spawn(async move { fetcher.go().await }),
+		tokio::spawn(async move { producer.go().await }),
+	)?;
 
 	Ok(())
 }
@@ -144,17 +141,15 @@ async fn load(
 	rx_term: Receiver<()>,
 	rx_force_term: Receiver<()>,
 ) -> anyhow::Result<()> {
-	let (consumer, rx) = LoaderPulsarConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
-	let (confirmer, tx_confirm) = LoaderPulsarConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
-	let loader = Loader::new(&cfg.loader, &cfg.mongo, rx, tx_confirm, &rx_force_term);
+	let (consumer, rx_pulsar_objs) = LoaderPulsarConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
+	let (confirmer, tx_pulsar_acks) = LoaderPulsarConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
+	let loader = Loader::new(&cfg.loader, &cfg.mongo, rx_pulsar_objs, tx_pulsar_acks, &rx_force_term);
 
-	let consumer_task = tokio::task::spawn(async move { consumer.go().await });
-	let loader_task = tokio::task::spawn(async move { loader.go().await });
-	let confirmer_task = tokio::task::spawn(async move { confirmer.go().await });
-
-	consumer_task.await.context("cannot execute consumer")?.context("error returned from consumer")?;
-	loader_task.await.context("cannot execute loader")?.context("error returned from loader")?;
-	confirmer_task.await.context("cannot execute confirmer")?.context("error returned from confirmer")?;
+	tokio::try_join!(
+		tokio::spawn(async move { consumer.go().await }),
+		tokio::spawn(async move { loader.go().await }),
+		tokio::spawn(async move { confirmer.go().await }),
+	)?;
 
 	Ok(())
 }
