@@ -66,6 +66,7 @@ pub struct BatchingConfig {
 	#[serde(alias = "releaseafter")]
 	pub release_after: CDuration,
 }
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShutdownConfig {

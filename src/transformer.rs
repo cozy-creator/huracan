@@ -47,6 +47,7 @@ struct EnrichedObjectChangeInfo {
 	version:       VersionNumber,
 	object_id:     ObjectID,
 }
+
 pub struct ObjectProducer {
 	cfg:        LoaderConfig,
 	pulsar_cfg: PulsarConfig,
