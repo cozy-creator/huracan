@@ -3,7 +3,7 @@ use bson::{self, Document};
 use mongodb::{bson::doc, options::ClientOptions, Client, Collection};
 use pulsar::message::proto::MessageIdData;
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
-use sui_sdk::rpc_types::ObjectChange;
+use sui_sdk::rpc_types::ObjectChange as SuiObjectChange;
 
 use crate::{
 	_prelude::*,
@@ -35,12 +35,12 @@ impl Loader {
 
 	async fn process_object_change(collection: &mut Collection<Document>, change: &EnrichedObjectChange) -> Result<()> {
 		match change.object_change.change {
-			ObjectChange::Deleted { object_id, version, .. } => {
+			SuiObjectChange::Deleted { object_id, version, .. } => {
 				let filter = doc! { "_id": object_id.to_string(), "version": version.to_string() };
 				info!(object_id = ?object_id, version = ?version, "deleting object");
 				collection.delete_one(filter, None).await?;
 			}
-			ObjectChange::Created { object_id, version, .. } => {
+			SuiObjectChange::Created { object_id, version, .. } => {
 				if let Some(object) = &change.object {
 					info!(object_id = ?object_id, version = ?version, "inserting object");
 					let serialized_change = bson::to_bson(object)?;
@@ -60,7 +60,7 @@ impl Loader {
 					warn!(object_id = ?object_id, version = ?version, "cannot insert object, - missing object data")
 				}
 			}
-			ObjectChange::Mutated { object_id, version, .. } => {
+			SuiObjectChange::Mutated { object_id, version, .. } => {
 				if let Some(object) = &change.object {
 					let serialized_change = bson::to_bson(object)?;
 					let document = serialized_change.as_document().context("cannot convert to bson document")?;

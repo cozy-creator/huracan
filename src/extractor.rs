@@ -2,7 +2,9 @@ use anyhow::Result;
 use pulsar::{producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::{
-	rpc_types::{ObjectChange, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery},
+	rpc_types::{
+		ObjectChange as SuiObjectChange, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
+	},
 	SuiClientBuilder,
 };
 
@@ -14,7 +16,7 @@ use crate::{
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExtractedObjectChange {
-	pub change: ObjectChange,
+	pub change: SuiObjectChange,
 }
 
 impl SerializeMessage for ExtractedObjectChange {
@@ -126,7 +128,7 @@ impl Extractor {
 		(Self { rx_term, tx, cfg: cfg.clone() }, rx)
 	}
 
-	async fn handle_object_change(&self, change: ObjectChange) -> Result<()> {
+	async fn handle_object_change(&self, change: SuiObjectChange) -> Result<()> {
 		let pretty_object_change = serde_json::to_string_pretty(&change).expect("valid object change");
 
 		self.tx.send_async(ExtractedObjectChange { change }).await?;

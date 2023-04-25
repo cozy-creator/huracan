@@ -2,7 +2,10 @@ use anyhow::Result;
 use pulsar::{message::proto::MessageIdData, producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::{
-	rpc_types::{ObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions, SuiPastObjectResponse},
+	rpc_types::{
+		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions,
+		SuiPastObjectResponse,
+	},
 	SuiClientBuilder,
 };
 use sui_types::base_types::{ObjectID, VersionNumber};
@@ -165,25 +168,25 @@ impl Transformer {
 
 	fn map(c: &ExtractedObjectChange, message_id: &MessageIdData) -> Option<EnrichedObjectChangeInfo> {
 		match c.change.clone() {
-			ObjectChange::Published { package_id, version, .. } => Some(EnrichedObjectChangeInfo {
+			SuiObjectChange::Published { package_id, version, .. } => Some(EnrichedObjectChangeInfo {
 				message_id: message_id.clone(),
 				object_id: package_id,
 				version,
 				object_change: c.clone().into(),
 			}),
-			ObjectChange::Created { object_id, version, .. } => Some(EnrichedObjectChangeInfo {
+			SuiObjectChange::Created { object_id, version, .. } => Some(EnrichedObjectChangeInfo {
 				message_id: message_id.clone(),
 				object_id,
 				version,
 				object_change: c.clone().into(),
 			}),
-			ObjectChange::Mutated { object_id, version, .. } => Some(EnrichedObjectChangeInfo {
+			SuiObjectChange::Mutated { object_id, version, .. } => Some(EnrichedObjectChangeInfo {
 				message_id: message_id.clone(),
 				object_id,
 				version,
 				object_change: c.clone().into(),
 			}),
-			ObjectChange::Wrapped { object_id, object_type, .. } => {
+			SuiObjectChange::Wrapped { object_id, object_type, .. } => {
 				warn!(object_id = ?object_id, object_type = ?object_type, "wrapped!");
 				None
 			}
