@@ -5,13 +5,14 @@ Reads events from SUI RPC and pushes them into Apache Pulsar
 - events are batched before writing to pulsar
 
 ## Use
- - Extract: `cargo run -- --config-path ./config.yaml --print-config extract`
+Ensure config.yaml is located in root directory of this project. Most of the CLI options are not currently working.
+Also ensure that all API keys, etc are configured in config.yaml.
+
+- Extract: cargo run -- extract
     Pulls for object changes via SUI RPC and pushes into Pulsar
-
- - Transform: `cargo run -- --config-path ./config.yaml --print-config transform`
+- Transform: cargo run -- transform
     Reads from Pulsar, enriches with object data via SUI RPC and pushes into Pulsar
-
- - Load: `cargo run -- --config-path ./config.yaml --print-config load`
+- Load: cargo run -- load
     Reads from Pulsar and writes to Mongo
 
 ## Development
