@@ -1,6 +1,10 @@
 use anyhow::Result;
 use bson::{self, Document};
-use mongodb::{bson::doc, options::ClientOptions, Client, Collection};
+use mongodb::{
+	bson::doc,
+	options::{ClientOptions, UpdateOptions},
+	Client, Collection,
+};
 use pulsar::message::proto::MessageIdData;
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::rpc_types::ObjectChange as SuiObjectChange;
@@ -45,15 +49,21 @@ impl Loader {
 					info!(object_id = ?object_id, version = ?version, "inserting object");
 					let serialized_change = bson::to_bson(object)?;
 					let document = serialized_change.as_document().context("cannot convert to bson document")?;
+					let filter = doc! { "_id": object_id.to_string(), "version": version.to_string() };
+					let update_options = UpdateOptions::builder().upsert(true).build();
 
+					// We have to use update_one with upsert: true instead of insert_one because sometimes there are duplicate objects in the pipeline.
 					collection
-						.insert_one(
+						.update_one(
+							filter,
 							doc! {
-								"_id": object_id.to_string(),
-								 "version": version.to_string(),
-								 "object": document,
+							"$set": {
+									"_id": object_id.to_string(),
+									"version": version.to_string(),
+									"object": document,
+								}
 							},
-							None,
+							update_options,
 						)
 						.await?;
 				} else {
