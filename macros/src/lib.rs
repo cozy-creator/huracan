@@ -11,7 +11,7 @@ pub fn pulsar_message(input: proc_macro::TokenStream) -> proc_macro::TokenStream
 		impl pulsar::SerializeMessage for #name {
 			fn serialize_message(input: Self) -> anyhow::Result<pulsar::producer::Message, pulsar::Error> {
 				let payload = serde_json::to_vec(&input).map_err(|e| pulsar::Error::Custom(e.to_string()))?;
-				Ok(producer::Message { payload, ..Default::default() })
+				Ok(pulsar::producer::Message { payload, ..Default::default() })
 			}
 		}
 
