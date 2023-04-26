@@ -167,6 +167,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 						panic!("sui.try_multi_get_parsed_past_object() mismatch between input and result len!");
 					}
 					for (mut snapshot, res) in zip(chunk, objs) {
+						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
 						if let Some(obj) = parse_past_object_response(res) {
 							snapshot.object = Some(obj);
 							yield (StepStatus::Ok, snapshot);
