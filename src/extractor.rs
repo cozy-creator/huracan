@@ -15,18 +15,18 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ExtractedObjectChange {
+pub struct RawObjectChange {
 	pub change: SuiObjectChange,
 }
 
-impl SerializeMessage for ExtractedObjectChange {
+impl SerializeMessage for RawObjectChange {
 	fn serialize_message(input: Self) -> Result<producer::Message, PulsarError> {
 		let payload = serde_json::to_vec(&input).map_err(|e| PulsarError::Custom(e.to_string()))?;
 		Ok(producer::Message { payload, ..Default::default() })
 	}
 }
 
-impl DeserializeMessage for ExtractedObjectChange {
+impl DeserializeMessage for RawObjectChange {
 	type Output = Result<Self>;
 
 	fn deserialize_message(payload: &pulsar::Payload) -> Self::Output {
@@ -38,14 +38,14 @@ pub struct PulsarProducer {
 	cfg:        LoaderConfig,
 	pulsar_cfg: PulsarConfig,
 
-	rx:            Receiver<ExtractedObjectChange>,
+	rx:            Receiver<RawObjectChange>,
 	rx_force_term: Receiver<()>,
 }
 
 pub struct Extractor {
 	rx_term: Receiver<()>,
 
-	tx:  Sender<ExtractedObjectChange>,
+	tx:  Sender<RawObjectChange>,
 	cfg: SuiConfig,
 }
 
@@ -53,7 +53,7 @@ impl PulsarProducer {
 	pub fn new(
 		cfg: &LoaderConfig,
 		pulsar_cfg: &PulsarConfig,
-		rx_extractor: Receiver<ExtractedObjectChange>,
+		rx_extractor: Receiver<RawObjectChange>,
 		rx_force_term: Receiver<()>,
 	) -> Self {
 		Self { cfg: cfg.clone(), pulsar_cfg: pulsar_cfg.clone(), rx: rx_extractor, rx_force_term }
@@ -119,11 +119,7 @@ impl PulsarProducer {
 }
 
 impl Extractor {
-	pub fn new(
-		cfg: &SuiConfig,
-		loader_cfg: &LoaderConfig,
-		rx_term: Receiver<()>,
-	) -> (Self, Receiver<ExtractedObjectChange>) {
+	pub fn new(cfg: &SuiConfig, loader_cfg: &LoaderConfig, rx_term: Receiver<()>) -> (Self, Receiver<RawObjectChange>) {
 		let (tx, rx) = bounded_ch(loader_cfg.buffer_size);
 		(Self { rx_term, tx, cfg: cfg.clone() }, rx)
 	}
@@ -131,7 +127,7 @@ impl Extractor {
 	async fn handle_object_change(&self, change: SuiObjectChange) -> Result<()> {
 		let pretty_object_change = serde_json::to_string_pretty(&change).expect("valid object change");
 
-		self.tx.send_async(ExtractedObjectChange { change }).await?;
+		self.tx.send_async(RawObjectChange { change }).await?;
 
 		debug!(change = ?pretty_object_change, "object change");
 

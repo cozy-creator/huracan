@@ -13,18 +13,18 @@ use sui_types::base_types::{ObjectID, VersionNumber};
 use crate::{
 	_prelude::*,
 	conf::{LoaderConfig, PulsarConfig, SuiConfig},
-	extractor::ExtractedObjectChange,
+	extractor::RawObjectChange,
 	utils,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnrichedObjectChange {
-	pub object_change: ExtractedObjectChange,
+	pub object_change: RawObjectChange,
 	pub object:        Option<SuiObjectData>,
 }
 
-impl From<ExtractedObjectChange> for EnrichedObjectChange {
-	fn from(value: ExtractedObjectChange) -> Self {
+impl From<RawObjectChange> for EnrichedObjectChange {
+	fn from(value: RawObjectChange) -> Self {
 		Self { object_change: value, object: None }
 	}
 }
@@ -141,7 +141,7 @@ impl ObjectProducer {
 pub struct Transformer {
 	cfg:              LoaderConfig,
 	sui_cfg:          SuiConfig,
-	rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
+	rx_object_change: Receiver<(RawObjectChange, MessageIdData)>,
 	tx_produce:       Sender<(EnrichedObjectChange, MessageIdData)>,
 	rx_force_term:    Receiver<()>,
 }
@@ -150,7 +150,7 @@ impl Transformer {
 	pub fn new(
 		cfg: &LoaderConfig,
 		sui_cfg: &SuiConfig,
-		rx_object_change: Receiver<(ExtractedObjectChange, MessageIdData)>,
+		rx_object_change: Receiver<(RawObjectChange, MessageIdData)>,
 		rx_force_term: &Receiver<()>,
 	) -> (Self, Receiver<(EnrichedObjectChange, MessageIdData)>) {
 		let (tx_produce, rx_produce) = bounded_ch(cfg.buffer_size);
@@ -166,7 +166,7 @@ impl Transformer {
 		)
 	}
 
-	fn map(c: &ExtractedObjectChange, message_id: &MessageIdData) -> Option<EnrichedObjectChangeInfo> {
+	fn map(c: &RawObjectChange, message_id: &MessageIdData) -> Option<EnrichedObjectChangeInfo> {
 		match c.change.clone() {
 			SuiObjectChange::Published { package_id, version, .. } => Some(EnrichedObjectChangeInfo {
 				message_id: message_id.clone(),
@@ -324,7 +324,7 @@ impl PulsarConfirmer {
 	pub async fn go(self) -> Result<()> {
 		let topic = self.pulsar_cfg.object_changes.topic.clone();
 
-		let mut consumer = utils::create_pulsar_consumer::<ExtractedObjectChange>(&utils::PulsarConsumerOptions {
+		let mut consumer = utils::create_pulsar_consumer::<RawObjectChange>(&utils::PulsarConsumerOptions {
 			uri:          self.pulsar_cfg.uri,
 			topic:        self.pulsar_cfg.object_changes.topic,
 			consumer:     self.pulsar_cfg.object_changes.consumer,
@@ -357,7 +357,7 @@ impl PulsarConfirmer {
 
 pub struct PulsarConsumer {
 	pulsar_cfg:       PulsarConfig,
-	tx_object_change: Sender<(ExtractedObjectChange, MessageIdData)>,
+	tx_object_change: Sender<(RawObjectChange, MessageIdData)>,
 	rx_term:          Receiver<()>,
 }
 
@@ -366,14 +366,14 @@ impl PulsarConsumer {
 		pulsar_cfg: &PulsarConfig,
 		loader_cfg: &LoaderConfig,
 		rx_term: &Receiver<()>,
-	) -> (Self, Receiver<(ExtractedObjectChange, MessageIdData)>) {
+	) -> (Self, Receiver<(RawObjectChange, MessageIdData)>) {
 		let (tx_object_change, rx_object_change) = bounded_ch(loader_cfg.buffer_size);
 
 		(Self { pulsar_cfg: pulsar_cfg.clone(), tx_object_change, rx_term: rx_term.clone() }, rx_object_change)
 	}
 
 	pub async fn go(self) -> Result<()> {
-		let mut consumer = utils::create_pulsar_consumer::<ExtractedObjectChange>(&utils::PulsarConsumerOptions {
+		let mut consumer = utils::create_pulsar_consumer::<RawObjectChange>(&utils::PulsarConsumerOptions {
 			uri:          self.pulsar_cfg.uri,
 			topic:        self.pulsar_cfg.object_changes.topic,
 			consumer:     self.pulsar_cfg.object_changes.consumer,
