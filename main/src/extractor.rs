@@ -1,5 +1,4 @@
 use anyhow::Result;
-use pulsar::{producer, DeserializeMessage, Error as PulsarError, SerializeMessage};
 use relabuf::{ExponentialBackoff, RelaBuf, RelaBufConfig};
 use sui_sdk::{
 	rpc_types::{
