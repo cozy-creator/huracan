@@ -1,27 +1,2 @@
-[package]
-name = "sui-data-loader"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow = "1.0"
-futures = "0.3"
-figment = { version = "0.10", features = ["yaml", "env"] }
-clap = "4.2.1"
-flume = "0.10.14"
-humanize-rs = "0.1"
-tracing = "0.1"
-tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-tracing-futures = "~0.2.5"
-
-tokio = { version = "1.27.0", features = ["full"] }
-sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.32.0" }
-sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.32.0" }
-pulsar = "5.1"
-mongodb = "2.3.0"
-relabuf = "~0.16.0"
-
-serde_json = "1.0"
-serde = {version = "~1.0.125", features = ["derive"] }
-dotenv = "0.15.0"
-bson = "2.6.1"
+[workspace]
+members = ["main", "macros"]

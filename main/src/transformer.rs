@@ -17,7 +17,7 @@ use crate::{
 	utils,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct EnrichedObjectChange {
 	pub object_change: RawObjectChange,
 	pub object:        Option<SuiObjectData>,
@@ -26,21 +26,6 @@ pub struct EnrichedObjectChange {
 impl From<RawObjectChange> for EnrichedObjectChange {
 	fn from(value: RawObjectChange) -> Self {
 		Self { object_change: value, object: None }
-	}
-}
-
-impl SerializeMessage for EnrichedObjectChange {
-	fn serialize_message(input: Self) -> Result<producer::Message, PulsarError> {
-		let payload = serde_json::to_vec(&input).map_err(|e| PulsarError::Custom(e.to_string()))?;
-		Ok(producer::Message { payload, ..Default::default() })
-	}
-}
-
-impl DeserializeMessage for EnrichedObjectChange {
-	type Output = Result<Self>;
-
-	fn deserialize_message(payload: &pulsar::Payload) -> Self::Output {
-		Ok(serde_json::from_slice(&payload.data).map_err(|e| PulsarError::Custom(e.to_string()))?)
 	}
 }
 
