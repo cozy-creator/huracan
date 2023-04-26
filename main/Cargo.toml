@@ -27,3 +27,6 @@ dotenv = "0.15.0"
 bson = "2.6.1"
 
 macros = {path = "../macros"}
+futures-util = "0.3.28"
+async-stream = "0.3.5"
+futures-batch = "0.6.1"

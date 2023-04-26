@@ -4,6 +4,7 @@ extern crate serde;
 mod _prelude;
 mod cli;
 mod conf;
+mod etl;
 mod extractor;
 mod loader;
 mod transformer;
@@ -15,6 +16,7 @@ use conf::AppConfig;
 use dotenv::dotenv;
 use extractor::{Extractor, PulsarProducer as PulsarObjectChangeProducer};
 use loader::{Loader, PulsarConfirmer as LoaderPulsarConfirmer, PulsarConsumer as LoaderPulsarConsumer};
+use sui_sdk::SuiClientBuilder;
 use tracing_subscriber::filter::EnvFilter;
 use transformer::{
 	ObjectProducer as PulsarObjectProducer, PulsarConfirmer as PulsarObjectChangeConfirmer,
@@ -171,6 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	}
 
 	let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
+
+	let _sui = SuiClientBuilder::default().build(cfg.sui.api.http.clone()).await?.read_api();
 
 	match args.command {
 		Commands::Extract(cmd) => extract(&cfg, cmd, rx_term, rx_force_term).await.context("error during extraction"),
