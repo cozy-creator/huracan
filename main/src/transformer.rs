@@ -172,10 +172,12 @@ impl Transformer {
 				object_change: c.clone().into(),
 			}),
 			SuiObjectChange::Wrapped { object_id, object_type, .. } => {
+				// TODO
 				warn!(object_id = ?object_id, object_type = ?object_type, "wrapped!");
 				None
 			}
 
+			// TODO
 			_ => None,
 		}
 	}
@@ -379,6 +381,7 @@ impl PulsarConsumer {
 
 						let _ = self.tx_object_change.send_async((object_change, message_id)).await;
 					} else {
+						// FIXME
 						break
 					}
 				},
