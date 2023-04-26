@@ -11,6 +11,7 @@ use sui_sdk::{
 		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
 	},
 };
+use sui_types::base_types::SequenceNumber;
 
 use crate::_prelude::*;
 
@@ -31,17 +32,20 @@ impl ObjectSnapshot {
 }
 
 impl ObjectSnapshot {
-	pub fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
+	pub fn get_change_version(&self) -> SequenceNumber {
 		use SuiObjectChange::*;
-		let version = match &self.change {
+		match &self.change {
 			Published { version, .. }
 			| Created { version, .. }
 			| Mutated { version, .. }
 			| Transferred { version, .. }
 			| Deleted { version, .. }
 			| Wrapped { version, .. } => *version,
-		};
-		SuiGetPastObjectRequest { object_id: self.change.object_id(), version }
+		}
+	}
+
+	pub fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
+		SuiGetPastObjectRequest { object_id: self.change.object_id(), version: self.get_change_version() }
 	}
 
 	// TODO is this exactly what we want? skip fetching objects for anything but these 3 types of changes?
@@ -102,10 +106,15 @@ pub async fn extract<'a>(
 	})
 }
 
+pub enum StepStatus {
+	Ok,
+	Err,
+}
+
 pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	stream: S,
 	sui: &'a ReadApi,
-) -> impl Stream<Item = ObjectSnapshot> + 'a {
+) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
 	// batch incoming items so we can amortize the cost of sui api calls,
 	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their
 	// own batching logic, if necessary (e.g. Pulsar producer will auto-batch transparently, if configured)
@@ -127,12 +136,28 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 			// filter and remove changes that we shouldn't fetch objects for, and stream them as is
 			let skip = chunk.drain_filter(|o| o.skip_fetching_object()).collect::<Vec<_>>();
 			for item in skip {
-				yield item;
+				yield (StepStatus::Ok, item);
 			}
 			let query_objs = chunk.iter().map(|o| o.get_past_object_request()).collect::<Vec<_>>();
 			match sui.try_multi_get_parsed_past_object(query_objs, query_opts.clone()).await {
 				Err(err) => {
-					error!(error = format!("{err:?}"), "cannot fetch object data for one or more objects");
+					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
+					// try one by one
+					for mut snapshot in chunk {
+						match sui.try_get_parsed_past_object(snapshot.change.object_id(), snapshot.get_change_version(), query_opts.clone()).await {
+							Err(err) => {
+								// TODO add info about object to log
+								error!(error = format!("{err:?}"), "individual fetch also failed");
+								yield (StepStatus::Err, snapshot);
+							},
+							Ok(res) => {
+								if let Some(obj) = parse_past_object_response(res) {
+									snapshot.object = Some(obj);
+									yield (StepStatus::Ok, snapshot);
+								}
+							}
+						}
+					}
 				},
 				Ok(objs) => {
 					// XXX: relying on a possible Sui API implementation detail
@@ -142,29 +167,34 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 						panic!("sui.try_multi_get_parsed_past_object() mismatch between input and result len!");
 					}
 					for (mut snapshot, res) in zip(chunk, objs) {
-						use SuiPastObjectResponse::*;
-						match res {
-							VersionFound(obj) => {
-								snapshot.object = Some(obj);
-								yield snapshot;
-							},
-							ObjectDeleted(o) => {
-								// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
-								info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
-							},
-							ObjectNotExists(object_id) => {
-								info!(object_id = ?object_id, "object doesn't exist");
-							},
-							VersionNotFound(object_id, version) => {
-								info!(object_id = ?object_id, version = ?version, "object not found");
-							},
-							VersionTooHigh{object_id, asked_version, latest_version} => {
-								info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
-							},
+						if let Some(obj) = parse_past_object_response(res) {
+							snapshot.object = Some(obj);
+							yield (StepStatus::Ok, snapshot);
 						}
 					}
 				}
 			}
 		}
 	}
+}
+
+fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<SuiObjectData> {
+	use SuiPastObjectResponse::*;
+	match res {
+		VersionFound(obj) => return Some(obj),
+		ObjectDeleted(o) => {
+			// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
+			info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
+		}
+		ObjectNotExists(object_id) => {
+			info!(object_id = ?object_id, "object doesn't exist");
+		}
+		VersionNotFound(object_id, version) => {
+			info!(object_id = ?object_id, version = ?version, "object not found");
+		}
+		VersionTooHigh { object_id, asked_version, latest_version } => {
+			info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
+		}
+	};
+	None
 }
