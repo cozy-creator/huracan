@@ -1,3 +1,5 @@
+use std::iter::zip;
+
 use anyhow::Result;
 use async_stream::stream;
 use futures::Stream;
@@ -41,6 +43,15 @@ impl ObjectSnapshot {
 		};
 		SuiGetPastObjectRequest { object_id: self.change.object_id(), version }
 	}
+
+	// TODO is this exactly what we want? skip fetching objects for anything but these 3 types of changes?
+	pub fn skip_fetching_object(&self) -> bool {
+		use SuiObjectChange::*;
+		match &self.change {
+			Published { .. } | Created { .. } | Mutated { .. } => false,
+			_ => true,
+		}
+	}
 }
 
 pub async fn extract<'a>(
@@ -61,7 +72,7 @@ pub async fn extract<'a>(
 					match page {
 						Ok(page) => {
 							// if we're working faster than sui has new data for us, sleep a little
-							// (as long as a query usually takes seems like a good duration)
+							// (as long as a query usually takes seems like a good duration, but at least 250ms)
 							if page.data.len() == 0 {
 								let dur = std::cmp::max(Duration::from_millis(250), start.elapsed());
 								info!("no new results from sui, will wait {}ms before trying again", dur.as_millis());
@@ -112,7 +123,12 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	};
 
 	stream! {
-		for await chunk in stream {
+		for await mut chunk in stream {
+			// filter and remove changes that we shouldn't fetch objects for, and stream them as is
+			let skip = chunk.drain_filter(|o| o.skip_fetching_object()).collect::<Vec<_>>();
+			for item in skip {
+				yield item;
+			}
 			let query_objs = chunk.iter().map(|o| o.get_past_object_request()).collect::<Vec<_>>();
 			match sui.try_multi_get_parsed_past_object(query_objs, query_opts.clone()).await {
 				Err(err) => {
@@ -125,7 +141,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					if objs.len() != chunk.len() {
 						panic!("sui.try_multi_get_parsed_past_object() mismatch between input and result len!");
 					}
-					for (mut snapshot, res) in std::iter::zip(chunk, objs) {
+					for (mut snapshot, res) in zip(chunk, objs) {
 						use SuiPastObjectResponse::*;
 						match res {
 							VersionFound(obj) => {
