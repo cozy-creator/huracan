@@ -164,6 +164,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
 					// try one by one
+					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut snapshot in chunk {
 						match sui.try_get_parsed_past_object(snapshot.change.object_id(), snapshot.get_change_version(), query_opts.clone()).await {
 							Err(err) => {
