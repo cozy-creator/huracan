@@ -131,6 +131,27 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 		show_storage_rebate:       true,
 	};
 
+	fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<SuiObjectData> {
+		use SuiPastObjectResponse::*;
+		match res {
+			VersionFound(obj) => return Some(obj),
+			ObjectDeleted(o) => {
+				// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
+				info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
+			}
+			ObjectNotExists(object_id) => {
+				info!(object_id = ?object_id, "object doesn't exist");
+			}
+			VersionNotFound(object_id, version) => {
+				info!(object_id = ?object_id, version = ?version, "object not found");
+			}
+			VersionTooHigh { object_id, asked_version, latest_version } => {
+				info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
+			}
+		};
+		None
+	}
+
 	stream! {
 		for await mut chunk in stream {
 			// filter and remove changes that we shouldn't fetch objects for, and stream them as is
@@ -177,25 +198,4 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 			}
 		}
 	}
-}
-
-fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<SuiObjectData> {
-	use SuiPastObjectResponse::*;
-	match res {
-		VersionFound(obj) => return Some(obj),
-		ObjectDeleted(o) => {
-			// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
-			info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
-		}
-		ObjectNotExists(object_id) => {
-			info!(object_id = ?object_id, "object doesn't exist");
-		}
-		VersionNotFound(object_id, version) => {
-			info!(object_id = ?object_id, version = ?version, "object not found");
-		}
-		VersionTooHigh { object_id, asked_version, latest_version } => {
-			info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
-		}
-	};
-	None
 }
