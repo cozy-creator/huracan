@@ -69,12 +69,6 @@ pub struct BatchingConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ShutdownConfig {
-	pub timeout: CDuration,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LogConfig {
 	pub level:  CLevel,
 	pub ansi:   bool,
@@ -139,21 +133,17 @@ impl<'de> Deserialize<'de> for CDuration {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
-	pub log:      LogConfig,
-	pub shutdown: ShutdownConfig,
-	pub loader:   LoaderConfig,
-	pub pulsar:   PulsarConfig,
-	pub mongo:    MongoConfig,
+	pub log:    LogConfig,
+	pub loader: LoaderConfig,
+	pub pulsar: PulsarConfig,
+	pub mongo:  MongoConfig,
 
 	pub sui: SuiConfig,
 }
 
 impl AppConfig {
-	pub fn new(path: Option<std::path::PathBuf>) -> anyhow::Result<Self> {
-		let cfg = Figment::new()
-			.merge(Yaml::file(path.unwrap_or("./config.yaml".into())))
-			.merge(Env::prefixed("APP_").split("_"))
-			.extract()?;
+	pub fn new(path: String) -> anyhow::Result<Self> {
+		let cfg = Figment::new().merge(Yaml::file(path)).merge(Env::prefixed("APP_").split("_")).extract()?;
 
 		Ok(cfg)
 	}

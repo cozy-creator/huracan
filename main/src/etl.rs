@@ -1,9 +1,14 @@
-use std::iter::zip;
+use std::{
+	fmt::{Display, Formatter},
+	iter::zip,
+};
 
 use anyhow::Result;
 use async_stream::stream;
+use bson::doc;
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
+use mongodb::Collection;
 use sui_sdk::{
 	apis::ReadApi,
 	rpc_types::{
@@ -11,7 +16,7 @@ use sui_sdk::{
 		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
 	},
 };
-use sui_types::base_types::SequenceNumber;
+use sui_types::{base_types::SequenceNumber, digests::TransactionDigest};
 
 use crate::_prelude::*;
 
@@ -21,18 +26,19 @@ const SUI_QUERY_MAX_RESULT_LIMIT: usize = 50;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectSnapshot {
+	pub digest: TransactionDigest,
 	pub change: SuiObjectChange,
 	pub object: Option<SuiObjectData>,
 }
 
 impl ObjectSnapshot {
-	pub fn new(change: SuiObjectChange) -> Self {
-		Self { change, object: None }
+	fn new(digest: TransactionDigest, change: SuiObjectChange) -> Self {
+		Self { digest, change, object: None }
 	}
 }
 
 impl ObjectSnapshot {
-	pub fn get_change_version(&self) -> SequenceNumber {
+	fn get_change_version(&self) -> SequenceNumber {
 		use SuiObjectChange::*;
 		match &self.change {
 			Published { version, .. }
@@ -44,12 +50,12 @@ impl ObjectSnapshot {
 		}
 	}
 
-	pub fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
+	fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
 		SuiGetPastObjectRequest { object_id: self.change.object_id(), version: self.get_change_version() }
 	}
 
 	// TODO is this exactly what we want? skip fetching objects for anything but these 3 types of changes?
-	pub fn skip_fetching_object(&self) -> bool {
+	fn skip_fetching_object(&self) -> bool {
 		use SuiObjectChange::*;
 		match &self.change {
 			Published { .. } | Created { .. } | Mutated { .. } => false,
@@ -58,49 +64,54 @@ impl ObjectSnapshot {
 	}
 }
 
-pub async fn extract<'a>(
+pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + 'a>(
 	sui: &'a ReadApi,
 	mut rx_term: tokio::sync::oneshot::Receiver<()>,
+	start_from: Option<TransactionDigest>,
+	on_next_page: P,
 ) -> Result<impl Stream<Item = ObjectSnapshot> + 'a> {
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 	);
-	let mut cursor = None;
+	let mut cursor = start_from;
+	let mut skip_page = false;
+	let mut retry_count = 0;
 
 	Ok(stream! {
 		loop {
-			let start = Instant::now();
 			tokio::select! {
 				page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), false) => {
 					match page {
 						Ok(page) => {
-							// if we're working faster than sui has new data for us, sleep a little
-							// (as long as a query usually takes seems like a good duration, but at least 250ms)
-							if page.data.len() == 0 {
-								let dur = std::cmp::max(Duration::from_millis(250), start.elapsed());
-								info!("no new results from sui, will wait {}ms before trying again", dur.as_millis());
-								tokio::time::sleep(dur).await;
-								continue;
-							}
-							for item in page.data {
-								if let Some(changes) = item.object_changes {
-									for change in changes {
-										yield ObjectSnapshot::new(change);
+							retry_count = 0;
+							if !skip_page {
+								for tx_block in page.data {
+									if let Some(changes) = tx_block.object_changes {
+										for change in changes {
+											yield ObjectSnapshot::new(tx_block.digest.clone(), change);
+										}
 									}
 								}
 							}
-							cursor = page.next_cursor;
+							if page.next_cursor.is_none() {
+								info!("no next page info from sui, will sleep for 10s, then try to find the next page...");
+								skip_page = true;
+								tokio::time::sleep(Duration::from_millis(10_000)).await;
+							} else {
+								skip_page = false;
+								on_next_page(cursor.clone(), page.next_cursor.unwrap());
+								cursor = page.next_cursor;
+							}
 						},
 						Err(err) => {
-							warn!(error = ?err, "There was an error reading object changes... retrying");
+							warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retry_count);
+							retry_count += 1;
+							tokio::time::sleep(Duration::from_millis(500)).await;
 						}
 					}
 				}
-				_ = &mut rx_term => {
-					info!("shutting down extract()");
-					break
-				}
+				_ = &mut rx_term => break
 			}
 		}
 	})
@@ -109,6 +120,15 @@ pub async fn extract<'a>(
 pub enum StepStatus {
 	Ok,
 	Err,
+}
+
+impl Display for StepStatus {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Ok => f.write_str("Ok"),
+			Self::Err => f.write_str("Err"),
+		}
+	}
 }
 
 pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
@@ -124,7 +144,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	let query_opts = SuiObjectDataOptions {
 		show_type:                 true,
 		show_owner:                true,
-		show_previous_transaction: false,
+		show_previous_transaction: true,
 		show_display:              false,
 		show_content:              true,
 		show_bcs:                  true,
@@ -199,4 +219,62 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 			}
 		}
 	}
+}
+
+pub async fn load<S: Stream<Item = ObjectSnapshot>>(
+	stream: S,
+	collection: &'a Collection<ObjectSnapshot>,
+) -> Result<impl Stream<Item = (StepStatus, ObjectSnapshot)>> {
+	let stream = stream.chunks_timeout(64, Duration::from_millis(1_000));
+
+	Ok(stream! {
+		for await chunk in stream {
+			// TODO batching is only planned, not implemented yet
+			// for now mongo's rust driver doesn't offer a way to do proper bulk querying / batching
+			// there's only an API for inserting many, but not for updating or deleting many, and
+			// neither an API that lets us do all of those within a single call
+			// so in order to work around that, we do the following:
+			// group items by the type of query they need to execute, and run each of those groups in one call each
+			// we also have to provide our own bulk update + delete methods, based on the db.run_command API
+			for item in chunk {
+				match item.change {
+					SuiObjectChange::Deleted { object_id, version, .. } => {
+						info!(object_id = ?object_id, version = ?version, "deleting object");
+						if let Result::Err(err) = collection.delete_one(doc! { "_id": object_id.to_string(), "version": version.to_string() }, None).await {
+							error!(object_id = ?object_id, version = ?version, "failed to delete: {}", err);
+							yield (StepStatus::Err, item);
+						} else {
+							yield (StepStatus::Ok, item);
+						}
+					}
+					SuiObjectChange::Created { object_id, version, .. } | SuiObjectChange::Mutated { object_id, version, .. } => {
+						info!(object_id = ?object_id, version = ?version, "inserting object");
+						let filter = doc! { "_id": object_id.to_string(), "version": version.to_string() };
+						let update_options = UpdateOptions::builder().upsert(true).build();
+
+						let res = collection
+								.update_one(
+									filter,
+									doc! {
+										"$set": {
+											"_id": object_id.to_string(),
+											"version": version.to_string(),
+											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
+										}
+									},
+									update_options,
+								)
+								.await;
+						if let Result::Err(err) = res {
+							error!(object_id = ?object_id, version = ?version, "failed to upsert: {}", err);
+							yield (StepStatus::Err, item);
+						} else {
+							yield (StepStatus::Ok, item);
+						}
+					}
+					_ => {}
+				}
+			}
+		}
+	})
 }

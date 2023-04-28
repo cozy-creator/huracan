@@ -10,7 +10,6 @@ pub use std::{
 };
 
 pub use anyhow::{anyhow, Context as _};
-pub use flume::{bounded as bounded_ch, unbounded as unbounded_ch, Receiver, RecvError, Selector, Sender};
 pub use futures::{future::join_all, StreamExt, TryStreamExt};
 pub use macros::PulsarMessage;
 pub use serde::{de, Deserialize, Deserializer};

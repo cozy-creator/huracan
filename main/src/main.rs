@@ -1,31 +1,29 @@
 #![feature(drain_filter)]
+#![feature(slice_group_by)]
 
 #[macro_use]
 extern crate serde;
+
+use async_stream::stream;
+use clap::Parser;
+use cli::Args;
+use conf::AppConfig;
+use dotenv::dotenv;
+use mongodb::{
+	options::{ClientOptions, ServerApi, ServerApiVersion},
+	Client,
+};
+use sui_sdk::SuiClientBuilder;
+use sui_types::digests::TransactionDigest;
+use tokio::pin;
+use tracing_subscriber::filter::EnvFilter;
+
+use crate::{_prelude::*, cli::Commands, etl::StepStatus};
 
 mod _prelude;
 mod cli;
 mod conf;
 mod etl;
-mod extractor;
-mod loader;
-mod transformer;
-mod utils;
-
-use clap::Parser;
-use cli::{Args, Commands, ExtractArgs, LoadArgs, TransformArgs};
-use conf::AppConfig;
-use dotenv::dotenv;
-use extractor::{Extractor, PulsarProducer as PulsarObjectChangeProducer};
-use loader::{Loader, PulsarConfirmer as LoaderPulsarConfirmer, PulsarConsumer as LoaderPulsarConsumer};
-use sui_sdk::SuiClientBuilder;
-use tracing_subscriber::filter::EnvFilter;
-use transformer::{
-	ObjectProducer as PulsarObjectProducer, PulsarConfirmer as PulsarObjectChangeConfirmer,
-	PulsarConsumer as PulsarObjectChangeConsumer, Transformer,
-};
-
-use crate::_prelude::*;
 
 fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 	let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
@@ -42,124 +40,17 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 	Ok(())
 }
 
-fn setup_signal_handlers(cfg: &AppConfig) -> (Receiver<()>, Receiver<()>) {
-	let (tx_sig_term, rx_sig_term) = bounded_ch(0);
-	let (tx_force_term, rx_force_term) = bounded_ch(0);
-
-	let graceful_timeout = *cfg.shutdown.timeout;
-
-	enum SigTerm {
-		Tx(Sender<()>),
-		Instant(Instant),
-	}
-
+fn setup_ctrl_c_listener() -> tokio::sync::oneshot::Receiver<()> {
+	let (tx_sig_term, rx_sig_term) = tokio::sync::oneshot::channel();
 	tokio::spawn(async move {
-		let mut sig_term = SigTerm::Tx(tx_sig_term);
-
-		loop {
-			let timeout = time::sleep(Duration::from_millis(100));
-
-			tokio::select! {
-				_ = tokio::signal::ctrl_c() => {
-					if graceful_timeout.as_millis() < 1 {
-						warn!("Ctrl-C detected, but graceful_timeout is zero - switching to immediate shutdown mode");
-						break
-					}
-
-					warn!("Ctrl-C detected - stopping reading new object changes, awaiting graceful termination for {}s.", graceful_timeout.as_secs());
-					if let SigTerm::Instant(_) = &sig_term {
-						warn!("Ctrl-C detected while awaiting for graceful termination - switching to immediate shutdown mode");
-						break
-					}
-					sig_term = SigTerm::Instant(Instant::now());
-				}
-				_ = timeout => {}
-			}
-
-			match &sig_term {
-				SigTerm::Tx(tx_sig_term) => {
-					if tx_sig_term.is_disconnected() {
-						break
-					}
-				}
-				SigTerm::Instant(sig_term_instant) => {
-					if sig_term_instant.elapsed() > graceful_timeout {
-						warn!(
-							"Failed to exit within graceful timeout({}s.) - switching to immediate shutdown mode",
-							graceful_timeout.as_secs()
-						);
-						break
-					}
-				}
-			}
-		}
-
-		drop(tx_force_term);
+		tokio::signal::ctrl_c().await.unwrap();
+		let _ = tx_sig_term.send(());
 	});
-
-	(rx_sig_term, rx_force_term)
-}
-
-async fn extract(
-	cfg: &AppConfig,
-	_args: ExtractArgs,
-	rx_term: Receiver<()>,
-	rx_force_term: Receiver<()>,
-) -> anyhow::Result<()> {
-	let (extractor, rx_sui_changes) = Extractor::new(&cfg.sui, &cfg.loader, rx_term);
-	let producer = PulsarObjectChangeProducer::new(&cfg.loader, &cfg.pulsar, rx_sui_changes, rx_force_term);
-
-	tokio::try_join!(
-		tokio::spawn(async move { extractor.go().await }),
-		tokio::spawn(async move { producer.go().await }),
-	)?;
-
-	Ok(())
-}
-
-async fn transform(
-	cfg: &AppConfig,
-	_args: TransformArgs,
-	rx_term: Receiver<()>,
-	rx_force_term: Receiver<()>,
-) -> anyhow::Result<()> {
-	let (consumer, rx_pulsar_changes) = PulsarObjectChangeConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
-	let (confirmer, tx_pulsar_acks) = PulsarObjectChangeConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
-	let (fetcher, rx_enriched_events) = Transformer::new(&cfg.loader, &cfg.sui, rx_pulsar_changes, &rx_force_term);
-	let producer =
-		PulsarObjectProducer::new(&cfg.loader, &cfg.pulsar, rx_enriched_events, tx_pulsar_acks, &rx_force_term);
-
-	tokio::try_join!(
-		tokio::spawn(async move { consumer.go().await }),
-		tokio::spawn(async move { confirmer.go().await }),
-		tokio::spawn(async move { fetcher.go().await }),
-		tokio::spawn(async move { producer.go().await }),
-	)?;
-
-	Ok(())
-}
-
-async fn load(
-	cfg: &AppConfig,
-	_args: LoadArgs,
-	rx_term: Receiver<()>,
-	rx_force_term: Receiver<()>,
-) -> anyhow::Result<()> {
-	let (consumer, rx_pulsar_objs) = LoaderPulsarConsumer::new(&cfg.pulsar, &cfg.loader, &rx_term);
-	let (confirmer, tx_pulsar_acks) = LoaderPulsarConfirmer::new(&cfg.pulsar, &cfg.loader, &rx_force_term);
-	let loader = Loader::new(&cfg.loader, &cfg.mongo, rx_pulsar_objs, tx_pulsar_acks, &rx_force_term);
-
-	tokio::try_join!(
-		tokio::spawn(async move { consumer.go().await }),
-		tokio::spawn(async move { loader.go().await }),
-		tokio::spawn(async move { confirmer.go().await }),
-	)?;
-
-	Ok(())
+	rx_sig_term
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
 
 	let args: Args = Args::parse();
@@ -168,25 +59,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	info!("Starting SUI data loader...");
-	info!("Log system configured...: {} with filtering: {:?}", *cfg.log.level, cfg.log.filter);
 	if args.print_config {
 		info!("{:#?}", &cfg);
 	}
 
-	let (rx_term, rx_force_term) = setup_signal_handlers(&cfg);
+	let rx_term = setup_ctrl_c_listener();
 
-	let _sui = SuiClientBuilder::default().build(cfg.sui.api.http.clone()).await?.read_api();
+	let sui_client = SuiClientBuilder::default().build(cfg.sui.api.http.clone()).await?;
+	let sui = sui_client.read_api();
 
 	match args.command {
-		Commands::Extract(cmd) => extract(&cfg, cmd, rx_term, rx_force_term).await.context("error during extraction"),
-		Commands::Transform(cmd) => {
-			transform(&cfg, cmd, rx_term, rx_force_term).await.context("error during transforming")
+		Commands::Extract(_) => {
+			panic!("only 'all' command is currently implemented, executing all steps in a single process pipeline!")
 		}
-		Commands::Load(cmd) => load(&cfg, cmd, rx_term, rx_force_term).await.context("error during loading"),
-	}?;
+		Commands::Transform(_) => {
+			panic!("only 'all' command is currently implemented, executing all steps in a single process pipeline!")
+		}
+		Commands::Load(_) => {
+			panic!("only 'all' command is currently implemented, executing all steps in a single process pipeline!")
+		}
+		Commands::All(aargs) => {
+			let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
+			client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+			let client = Client::with_options(client_options)?;
+			let db = client.database(&cfg.mongo.database);
 
-	info!("Bye bye!");
+			let start_from = aargs.start_from.map(|s| TransactionDigest::from_str(&s).unwrap());
+			let items = etl::extract(&sui, rx_term, start_from, |completed, next| {
+				info!(
+					"page done: {}, next page: {}",
+					completed.map(|d| d.to_string()).unwrap_or("(initial)".into()),
+					next
+				);
+			})
+			.await?;
+
+			let items = etl::transform(items, &sui).await;
+
+			// filter out any failures and stop there, at least for now, so we can debug + fix if needed
+			// or else add handling for "normal" error conditions afterwards
+			let items = async move {
+				stream! {
+					for await (status, item) in items {
+						if let StepStatus::Ok = status {
+							// keep going with next step
+							yield item;
+						} else {
+							// stop and debug
+							error!(
+								?item,
+								"failed to fetch item! stopping stream, please investigate if there's a bug that needs fixing!"
+							);
+							break
+						}
+					}
+				}
+			}
+			.await;
+
+			pin!(items);
+			while let Some(item) = items.next().await {
+				info!("{:#?}", item);
+			}
+		}
+	}
 
 	Ok(())
 }

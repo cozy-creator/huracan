@@ -7,36 +7,6 @@ log:
   # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
   #filter:
 
-shutdown:
-  # when we first get shutdown signal we stop ingesting new events and wait up to graceful_timeout to finish sending existing data to pulsar
-  timeout: 10s
-
-loader:
-  # we batch data before sending it to Apache Pulsar / SUI API
-  batcher:
-    # send batch as soon as reach a soft_cap of buffered events
-    softcap: 30
-    # there's also a hard cap of events we buffer per loader
-    hardcap: 100
-    # unconditionally send batch after specified period of time even if soft_cap isn't quite reached yet
-    # prevents starvation adhering to some minimal latency when loader is starving for data
-    releaseafter: 500ms
-  # internal buffer size for channels
-  buffersize: 1000
-
-pulsar:
-  uri: "pulsar+ssl://sui-devnet.o-mvqin.snio.cloud:6651"
-  objectchanges:
-    topic: "persistent://public/default/sui-object-changes"
-    producer: "my-producer"
-    consumer: "my-consumer"
-    subscription: "my-sub"
-  enrichedobjectchanges:
-    topic: "sui-enriched-object-changes"
-    producer: "my-producer"
-    consumer: "my-consumer"
-    subscription: "my-sub"
-
 mongo:
   uri: "mongodb+srv://sui-devnet.gpf3cd1.mongodb.net/"
   database: "sui"
@@ -46,5 +16,3 @@ mongo:
 sui:
   api:
     http: "https://rpc-testnet.suiscan.xyz:443"
-  #transactionfilter:
-  pagesize: 100
