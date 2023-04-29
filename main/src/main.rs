@@ -79,11 +79,6 @@ async fn main() -> anyhow::Result<()> {
 			panic!("only 'all' command is currently implemented, executing all steps in a single process pipeline!")
 		}
 		Commands::All(aargs) => {
-			let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
-			client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
-			let client = Client::with_options(client_options)?;
-			let db = client.database(&cfg.mongo.database);
-
 			let start_from = aargs.start_from.map(|s| TransactionDigest::from_str(&s).unwrap());
 			let items = etl::extract(&sui, rx_term, start_from, |completed, next| {
 				info!(
@@ -117,10 +112,34 @@ async fn main() -> anyhow::Result<()> {
 			}
 			.await;
 
-			pin!(items);
-			while let Some(item) = items.next().await {
-				info!("{:#?}", item);
-			}
+			if !aargs.no_mongo {
+				let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
+				client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+				let client = Client::with_options(client_options)?;
+				let db = client.database(&cfg.mongo.database);
+
+				let items = etl::load(items, db.collection(&cfg.mongo.objects.collection)).await;
+
+				pin!(items);
+				while let Some((status, item)) = items.next().await {
+					if let StepStatus::Ok = status {
+						// ok
+					} else {
+						// stop and debug
+						error!(
+								?item,
+								"failed to execute mongo action! stopping stream, please investigate if there's a bug that needs fixing!"
+							);
+						break
+					}
+				}
+			} else {
+				// iterate over items to drive stream to completion
+				pin!(items);
+				while let Some(item) = items.next().await {
+					info!(?item, "completed in-memory processing for {:#?}", item);
+				}
+			};
 		}
 	}
 

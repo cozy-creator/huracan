@@ -11,7 +11,7 @@ mongo:
   uri: "mongodb+srv://sui-devnet.gpf3cd1.mongodb.net/"
   database: "sui"
   objects:
-    collection: "objects"
+    collection: "objects2"
 
 sui:
   api:

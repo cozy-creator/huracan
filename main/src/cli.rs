@@ -44,4 +44,10 @@ pub struct LoadArgs {}
 pub struct AllArgs {
 	#[arg(long, help = "transaction digest to start from")]
 	pub start_from: Option<String>,
+	#[arg(
+		long,
+		help = "disable connecting + saving to mongo, thus also disabling 'load' step",
+		default_value_t = false
+	)]
+	pub no_mongo:   bool,
 }

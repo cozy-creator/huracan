@@ -8,7 +8,7 @@ use async_stream::stream;
 use bson::doc;
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
-use mongodb::Collection;
+use mongodb::{options::UpdateOptions, Collection};
 use sui_sdk::{
 	apis::ReadApi,
 	rpc_types::{
@@ -95,6 +95,8 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 								}
 							}
 							if page.next_cursor.is_none() {
+								// TODO if we had an API that could give us the prev/next tx digests for any given tx digest
+								//		we could solve this a little more elegantly!
 								info!("no next page info from sui, will sleep for 10s, then try to find the next page...");
 								skip_page = true;
 								tokio::time::sleep(Duration::from_millis(10_000)).await;
@@ -223,11 +225,11 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 
 pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 	stream: S,
-	collection: &'a Collection<ObjectSnapshot>,
-) -> Result<impl Stream<Item = (StepStatus, ObjectSnapshot)>> {
+	collection: Collection<ObjectSnapshot>,
+) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> {
 	let stream = stream.chunks_timeout(64, Duration::from_millis(1_000));
 
-	Ok(stream! {
+	stream! {
 		for await chunk in stream {
 			// TODO batching is only planned, not implemented yet
 			// for now mongo's rust driver doesn't offer a way to do proper bulk querying / batching
@@ -238,18 +240,18 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 			// we also have to provide our own bulk update + delete methods, based on the db.run_command API
 			for item in chunk {
 				match item.change {
-					SuiObjectChange::Deleted { object_id, version, .. } => {
-						info!(object_id = ?object_id, version = ?version, "deleting object");
-						if let Result::Err(err) = collection.delete_one(doc! { "_id": object_id.to_string(), "version": version.to_string() }, None).await {
-							error!(object_id = ?object_id, version = ?version, "failed to delete: {}", err);
+					SuiObjectChange::Deleted { object_id, .. } => {
+						info!(object_id = ?object_id, tx = ?item.digest, "deleting object");
+						if let Result::Err(err) = collection.delete_one(doc! { "_id": object_id.to_string() }, None).await {
+							error!(object_id = ?object_id, tx = ?item.digest, "failed to delete: {}", err);
 							yield (StepStatus::Err, item);
 						} else {
 							yield (StepStatus::Ok, item);
 						}
 					}
 					SuiObjectChange::Created { object_id, version, .. } | SuiObjectChange::Mutated { object_id, version, .. } => {
-						info!(object_id = ?object_id, version = ?version, "inserting object");
-						let filter = doc! { "_id": object_id.to_string(), "version": version.to_string() };
+						info!(object_id = ?object_id, version = ?version, tx = ?item.digest, "upserting object");
+						let filter = doc! { "_id": object_id.to_string() };
 						let update_options = UpdateOptions::builder().upsert(true).build();
 
 						let res = collection
@@ -259,6 +261,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 										"$set": {
 											"_id": object_id.to_string(),
 											"version": version.to_string(),
+											"tx": item.digest.to_string(),
 											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
 										}
 									},
@@ -266,7 +269,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 								)
 								.await;
 						if let Result::Err(err) = res {
-							error!(object_id = ?object_id, version = ?version, "failed to upsert: {}", err);
+							error!(object_id = ?object_id, version = ?version, tx = ?item.digest, "failed to upsert: {}", err);
 							yield (StepStatus::Err, item);
 						} else {
 							yield (StepStatus::Ok, item);
@@ -276,5 +279,5 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 				}
 			}
 		}
-	})
+	}
 }
