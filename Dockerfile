@@ -1,31 +1,27 @@
-ARG RUST_VERSION=1.66.0
-ARG CARGO_CHEF_VERSION=0.1.52
-ARG BUILD_TYPE=--release
+# set to "--release" to produce release builds
+ARG BUILD_TYPE=""
 
-FROM rust:${RUST_VERSION} as planner
-ARG CARGO_CHEF_VERSION
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+WORKDIR /app
+RUN rustup toolchain install nightly
 
-WORKDIR app
-RUN cargo install cargo-chef --version ${CARGO_CHEF_VERSION}
+# caches info about our deps in recipe.json
+FROM chef AS planner
 COPY . .
-RUN cargo chef prepare  --recipe-path recipe.json
+RUN cargo +nightly chef prepare --recipe-path recipe.json
 
-FROM rust:${RUST_VERSION} as cacher
-WORKDIR app
-RUN cargo install cargo-chef
+FROM chef AS builder
+# install system deps we need to be able to build our deps and/or binary
+RUN apt-get update && apt-get -q -y install clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 COPY --from=planner /app/recipe.json recipe.json
-RUN apt-get update && apt-get -y install clang protobuf-compiler
-RUN cargo chef cook ${BUILD_TYPE} --recipe-path recipe.json
-
-FROM rust:${RUST_VERSION} as builder
-WORKDIR app
+# build just the deps
+RUN cargo +nightly chef cook ${BUILD_TYPE} --recipe-path recipe.json
+# copy and build main application
 COPY . .
-COPY --from=cacher /app/target target
-COPY --from=cacher /usr/local/cargo /usr/local/cargo
-RUN cargo build ${BUILD_TYPE}
+RUN cargo +nightly build ${BUILD_TYPE} --bin sui-indexer
 
-FROM rust:${RUST_VERSION} as runtime
-WORKDIR app
-COPY --from=builder /app/target/release/sui-data-loader /usr/local/bin
-ENV RUST_BACKTRACE=full
-ENTRYPOINT ["/usr/local/bin/sui-data-loader"]
+# any base image with libc works (not alpine and others that would require a static binary)
+FROM debian:buster-slim AS runtime
+WORKDIR /app
+COPY --from=builder /app/target/*/sui-indexer /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/sui-indexer"]
