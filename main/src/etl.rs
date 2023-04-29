@@ -242,9 +242,25 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 			for item in chunk {
 				use SuiObjectChange::*;
 				match item.change {
-					Deleted { object_id, .. } => {
+					Deleted { object_id, version, .. } => {
 						info!(object_id = ?object_id, tx = ?item.digest, "deleting object");
-						if let Result::Err(err) = collection.delete_one(doc! { "_id": object_id.to_string() }, None).await {
+						// we're assuming each object id will ever exist only once, so when deleting
+						// we don't check for previous versions
+						// we execute the delete, whenever it may come in, and it's final
+						let res = collection
+								.update_one(
+									doc! { "_id": object_id.to_string() },
+									doc! {
+										"$set": {
+											"_id": object_id.to_string(),
+											"version": version.to_string(),
+											"deleted": true,
+										}
+									},
+									UpdateOptions::builder().upsert(true).build(),
+								)
+								.await;
+						if let Result::Err(err) = res {
 							error!(object_id = ?object_id, tx = ?item.digest, "failed to delete: {}", err);
 							yield (StepStatus::Err, item);
 						} else {
@@ -253,9 +269,12 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 					}
 					Created { object_id, version, .. } | Mutated { object_id, version, .. } => {
 						info!(object_id = ?object_id, version = ?version, tx = ?item.digest, "upserting object");
+						// we will only upsert and object if this current version is higher than any previously stored one
+						// (if the object has already been deleted, we still allow setting any other fields, including
+						// any previously valid full object state... probably not needed, but also not incorrect)
 						let res = collection
 								.update_one(
-									doc! { "_id": object_id.to_string() },
+									doc! { "_id": object_id.to_string(), "version": { "$lt": version.to_string() } },
 									doc! {
 										"$set": {
 											"_id": object_id.to_string(),
