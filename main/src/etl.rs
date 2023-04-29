@@ -20,9 +20,9 @@ use sui_types::{base_types::SequenceNumber, digests::TransactionDigest};
 
 use crate::_prelude::*;
 
-// sui allows a max of 50 objects to be queried for at once, at least on some endpoints
-// (e.g. on `try_multi_get_parsed_past_object`)
-const SUI_QUERY_MAX_RESULT_LIMIT: usize = 50;
+// sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
+// endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
+const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectSnapshot {
