@@ -1,5 +1,7 @@
 .idea
-/target
+target
 log*
 *.iml
 Dockerfile
+.dockerignore
+.git
