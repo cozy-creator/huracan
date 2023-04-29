@@ -1,4 +1,3 @@
 /target
 /.local
-Cargo.lock
 .env
