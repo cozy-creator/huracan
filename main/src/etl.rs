@@ -35,9 +35,7 @@ impl ObjectSnapshot {
 	fn new(digest: TransactionDigest, change: SuiObjectChange) -> Self {
 		Self { digest, change, object: None }
 	}
-}
 
-impl ObjectSnapshot {
 	fn get_change_version(&self) -> SequenceNumber {
 		use SuiObjectChange::*;
 		match &self.change {
@@ -52,15 +50,6 @@ impl ObjectSnapshot {
 
 	fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
 		SuiGetPastObjectRequest { object_id: self.change.object_id(), version: self.get_change_version() }
-	}
-
-	// TODO is this exactly what we want? skip fetching objects for anything but these 3 types of changes?
-	fn skip_fetching_object(&self) -> bool {
-		use SuiObjectChange::*;
-		match &self.change {
-			Published { .. } | Created { .. } | Mutated { .. } => false,
-			_ => true,
-		}
 	}
 }
 
@@ -89,7 +78,11 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 								for tx_block in page.data {
 									if let Some(changes) = tx_block.object_changes {
 										for change in changes {
-											yield ObjectSnapshot::new(tx_block.digest.clone(), change);
+											use SuiObjectChange::*;
+											// we only care about create-update-delete
+											if let Created { .. } | Mutated { .. } | Deleted { .. } = change {
+												yield ObjectSnapshot::new(tx_block.digest.clone(), change);
+											}
 										}
 									}
 								}
@@ -176,11 +169,8 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 
 	stream! {
 		for await mut chunk in stream {
-			// filter and remove changes that we shouldn't fetch objects for, and stream them as is
-			let skip = chunk.drain_filter(|o| o.skip_fetching_object()).collect::<Vec<_>>();
-			for item in skip {
-				yield (StepStatus::Ok, item);
-			}
+			// skip loading objects for 'delete' type changes, as we're just going to delete them from our working set anyway
+			let deleted = chunk.drain_filter(|o| if let SuiObjectChange::Deleted {..} = o.change { true } else { false }).collect::<Vec<_>>();
 			let query_objs = chunk.iter().map(|o| o.get_past_object_request()).collect::<Vec<_>>();
 			match sui.try_multi_get_parsed_past_object(query_objs, query_opts.clone()).await {
 				Err(err) => {
@@ -218,6 +208,13 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 						}
 					}
 				}
+			}
+			// send in deleted items last, to ensure we don't re-insert any object that was just deleted
+			// just because they were processed as part of the same chunk of our stream here
+			// ideally we would execute these exactly in order, but that would require more implementation
+			// effort, and this simplification should retain logical correctness of effects
+			for item in deleted {
+				yield (StepStatus::Ok, item);
 			}
 		}
 	}
