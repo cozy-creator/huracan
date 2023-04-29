@@ -240,8 +240,9 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 			// group items by the type of query they need to execute, and run each of those groups in one call each
 			// we also have to provide our own bulk update + delete methods, based on the db.run_command API
 			for item in chunk {
+				use SuiObjectChange::*;
 				match item.change {
-					SuiObjectChange::Deleted { object_id, .. } => {
+					Deleted { object_id, .. } => {
 						info!(object_id = ?object_id, tx = ?item.digest, "deleting object");
 						if let Result::Err(err) = collection.delete_one(doc! { "_id": object_id.to_string() }, None).await {
 							error!(object_id = ?object_id, tx = ?item.digest, "failed to delete: {}", err);
@@ -250,7 +251,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 							yield (StepStatus::Ok, item);
 						}
 					}
-					SuiObjectChange::Created { object_id, version, .. } | SuiObjectChange::Mutated { object_id, version, .. } => {
+					Created { object_id, version, .. } | Mutated { object_id, version, .. } => {
 						info!(object_id = ?object_id, version = ?version, tx = ?item.digest, "upserting object");
 						let res = collection
 								.update_one(
