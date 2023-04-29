@@ -80,7 +80,11 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 										for change in changes {
 											use SuiObjectChange::*;
 											// we only care about create-update-delete
-											if let Created { .. } | Mutated { .. } | Deleted { .. } = change {
+											if let Created { object_type, .. } | Mutated { object_type, .. } | Deleted { object_type, .. } = &change {
+												// skip objects of type "coin"
+												if object_type.module.as_str() == "coin" {
+													continue
+												}
 												yield ObjectSnapshot::new(tx_block.digest.clone(), change);
 											}
 										}
