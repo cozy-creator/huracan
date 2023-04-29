@@ -262,7 +262,6 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 										"$set": {
 											"_id": object_id.to_string(),
 											"version": version.to_string(),
-											"tx": item.digest.to_string(),
 											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
 										}
 									},
