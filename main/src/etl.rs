@@ -156,16 +156,16 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 			VersionFound(obj) => return Some(obj),
 			ObjectDeleted(o) => {
 				// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
-				info!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object is in some further object change, skipping for now");
+				warn!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object not available: object has been deleted");
 			}
 			ObjectNotExists(object_id) => {
-				info!(object_id = ?object_id, "object doesn't exist");
+				warn!(object_id = ?object_id, "object not available: object doesn't exist");
 			}
 			VersionNotFound(object_id, version) => {
-				info!(object_id = ?object_id, version = ?version, "object not found");
+				warn!(object_id = ?object_id, version = ?version, "object not available: version not found");
 			}
 			VersionTooHigh { object_id, asked_version, latest_version } => {
-				info!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object version too high");
+				warn!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object not available: version too high");
 			}
 		};
 		None
@@ -252,12 +252,9 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 					}
 					SuiObjectChange::Created { object_id, version, .. } | SuiObjectChange::Mutated { object_id, version, .. } => {
 						info!(object_id = ?object_id, version = ?version, tx = ?item.digest, "upserting object");
-						let filter = doc! { "_id": object_id.to_string() };
-						let update_options = UpdateOptions::builder().upsert(true).build();
-
 						let res = collection
 								.update_one(
-									filter,
+									doc! { "_id": object_id.to_string() },
 									doc! {
 										"$set": {
 											"_id": object_id.to_string(),
@@ -265,7 +262,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
 										}
 									},
-									update_options,
+									UpdateOptions::builder().upsert(true).build(),
 								)
 								.await;
 						if let Result::Err(err) = res {
