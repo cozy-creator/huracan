@@ -1,5 +1,6 @@
 # set to "--release" to produce release builds
-ARG BUILD_TYPE=""
+# set to "" to produce debug builds
+ARG BUILD_TYPE="--release"
 
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
