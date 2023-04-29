@@ -17,7 +17,7 @@ tokio = { version = "1.27.0", features = ["full"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.32.0" }
 sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.32.0" }
 pulsar = "5.1"
-mongodb = "2.3.0"
+mongodb = "2.5.0"
 
 serde_json = "1.0"
 serde = {version = "~1.0.125", features = ["derive"] }
