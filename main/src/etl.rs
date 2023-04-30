@@ -138,7 +138,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their
 	// own batching logic, if necessary (e.g. Pulsar producer will auto-batch transparently, if configured)
 
-	let stream = stream.chunks_timeout(SUI_QUERY_MAX_RESULT_LIMIT, Duration::from_millis(1_000));
+	let stream = stream.chunks_timeout(50, Duration::from_millis(1_000));
 
 	let query_opts = SuiObjectDataOptions {
 		show_type:                 true,
