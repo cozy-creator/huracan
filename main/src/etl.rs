@@ -1,11 +1,12 @@
 use std::{
 	fmt::{Display, Formatter},
+	io::Cursor,
 	iter::zip,
 };
 
 use anyhow::Result;
 use async_stream::stream;
-use bson::doc;
+use bson::{doc, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::{options::UpdateOptions, Collection};
@@ -39,7 +40,7 @@ pub struct ObjectSnapshot {
 	pub change:    Change,
 	pub object_id: ObjectID,
 	pub version:   SequenceNumber,
-	pub object:    Option<SuiObjectData>,
+	pub object:    Option<Vec<u8>>,
 }
 
 impl ObjectSnapshot {
@@ -200,7 +201,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 							},
 							Ok(res) => {
 								if let Some(obj) = parse_past_object_response(res) {
-									snapshot.object = Some(obj);
+									snapshot.object = Some(bson::to_vec(&obj).unwrap());
 									yield (StepStatus::Ok, snapshot);
 								}
 							}
@@ -217,7 +218,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					for (mut snapshot, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
 						if let Some(obj) = parse_past_object_response(res) {
-							snapshot.object = Some(obj);
+							snapshot.object = Some(bson::to_vec(&obj).unwrap());
 							yield (StepStatus::Ok, snapshot);
 						}
 					}
@@ -282,6 +283,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 						// we will only upsert and object if this current version is higher than any previously stored one
 						// (if the object has already been deleted, we still allow setting any other fields, including
 						// any previously valid full object state... probably not needed, but also not incorrect)
+						let mut doc_reader = Cursor::new(item.object.as_ref().unwrap());
 						let res = collection
 								.update_one(
 									doc! { "_id": item.object_id.to_string(), "version": { "$lt": item.version.to_string() } },
@@ -289,7 +291,7 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 										"$set": {
 											"_id": item.object_id.to_string(),
 											"version": item.version.to_string(),
-											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
+											"object": Document::from_reader(&mut doc_reader).unwrap(),
 										}
 									},
 									UpdateOptions::builder().upsert(true).build(),
