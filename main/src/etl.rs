@@ -16,7 +16,10 @@ use sui_sdk::{
 		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
 	},
 };
-use sui_types::{base_types::SequenceNumber, digests::TransactionDigest};
+use sui_types::{
+	base_types::{ObjectID, SequenceNumber},
+	digests::TransactionDigest,
+};
 
 use crate::_prelude::*;
 
@@ -24,32 +27,41 @@ use crate::_prelude::*;
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Change {
+	Created,
+	Mutated,
+	Deleted,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectSnapshot {
-	pub digest: TransactionDigest,
-	pub change: SuiObjectChange,
-	pub object: Option<SuiObjectData>,
+	pub change:    Change,
+	pub object_id: ObjectID,
+	pub version:   SequenceNumber,
+	pub object:    Option<SuiObjectData>,
 }
 
 impl ObjectSnapshot {
-	fn new(digest: TransactionDigest, change: SuiObjectChange) -> Self {
-		Self { digest, change, object: None }
-	}
-
-	fn get_change_version(&self) -> SequenceNumber {
+	fn from(change: SuiObjectChange) -> Option<(Self, String)> {
 		use SuiObjectChange::*;
-		match &self.change {
-			Published { version, .. }
-			| Created { version, .. }
-			| Mutated { version, .. }
-			| Transferred { version, .. }
-			| Deleted { version, .. }
-			| Wrapped { version, .. } => *version,
-		}
+		let res = match change {
+			Created { object_id, version, object_type, .. } => {
+				(Self { change: Change::Created, object_id, version, object: None }, object_type.to_string())
+			}
+			Mutated { object_id, version, object_type, .. } => {
+				(Self { change: Change::Mutated, object_id, version, object: None }, object_type.to_string())
+			}
+			Deleted { object_id, version, object_type, .. } => {
+				(Self { change: Change::Deleted, object_id, version, object: None }, object_type.to_string())
+			}
+			_ => return None,
+		};
+		Some(res)
 	}
 
 	fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
-		SuiGetPastObjectRequest { object_id: self.change.object_id(), version: self.get_change_version() }
+		SuiGetPastObjectRequest { object_id: self.object_id, version: self.version }
 	}
 }
 
@@ -78,14 +90,12 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 								for tx_block in page.data {
 									if let Some(changes) = tx_block.object_changes {
 										for change in changes {
-											use SuiObjectChange::*;
-											// we only care about create-update-delete
-											if let Created { object_type, .. } | Mutated { object_type, .. } | Deleted { object_type, .. } = &change {
+											if let Some((change, object_type)) = ObjectSnapshot::from(change) {
 												// skip objects of type "coin"
-												if object_type.module.as_str() == "coin" {
+												if object_type.starts_with("0x2::coin::Coin") {
 													continue
 												}
-												yield ObjectSnapshot::new(tx_block.digest.clone(), change);
+												yield change;
 											}
 										}
 									}
@@ -156,7 +166,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 			VersionFound(obj) => return Some(obj),
 			ObjectDeleted(o) => {
 				// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
-				warn!(object_id = ?o.object_id, version = ?o.version, digest = ?o.digest, "object not available: object has been deleted");
+				warn!(object_id = ?o.object_id, version = ?o.version, "object not available: object has been deleted");
 			}
 			ObjectNotExists(object_id) => {
 				warn!(object_id = ?object_id, "object not available: object doesn't exist");
@@ -174,7 +184,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	stream! {
 		for await mut chunk in stream {
 			// skip loading objects for 'delete' type changes, as we're just going to delete them from our working set anyway
-			let deleted = chunk.drain_filter(|o| if let SuiObjectChange::Deleted {..} = o.change { true } else { false }).collect::<Vec<_>>();
+			let deleted = chunk.drain_filter(|o| if let Change::Deleted {..} = o.change { true } else { false }).collect::<Vec<_>>();
 			let query_objs = chunk.iter().map(|o| o.get_past_object_request()).collect::<Vec<_>>();
 			match sui.try_multi_get_parsed_past_object(query_objs, query_opts.clone()).await {
 				Err(err) => {
@@ -182,7 +192,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut snapshot in chunk {
-						match sui.try_get_parsed_past_object(snapshot.change.object_id(), snapshot.get_change_version(), query_opts.clone()).await {
+						match sui.try_get_parsed_past_object(snapshot.object_id, snapshot.version, query_opts.clone()).await {
 							Err(err) => {
 								// TODO add info about object to log
 								error!(error = format!("{err:?}"), "individual fetch also failed");
@@ -233,7 +243,6 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 
 	stream! {
 		for await chunk in stream {
-			// TODO batching is only planned, not implemented yet
 			// for now mongo's rust driver doesn't offer a way to do proper bulk querying / batching
 			// there's only an API for inserting many, but not for updating or deleting many, and
 			// neither an API that lets us do all of those within a single call
@@ -241,20 +250,20 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 			// group items by the type of query they need to execute, and run each of those groups in one call each
 			// we also have to provide our own bulk update + delete methods, based on the db.run_command API
 			for item in chunk {
-				use SuiObjectChange::*;
+				use Change::*;
 				match item.change {
-					Deleted { object_id, version, .. } => {
-						info!(object_id = ?object_id, tx = ?item.digest, "deleting object");
+					Deleted => {
+						info!(object_id = ?item.object_id, "deleting object");
 						// we're assuming each object id will ever exist only once, so when deleting
 						// we don't check for previous versions
 						// we execute the delete, whenever it may come in, and it's final
 						let res = collection
 								.update_one(
-									doc! { "_id": object_id.to_string() },
+									doc! { "_id": item.object_id.to_string() },
 									doc! {
 										"$set": {
-											"_id": object_id.to_string(),
-											"version": version.to_string(),
+											"_id": item.object_id.to_string(),
+											"version": item.version.to_string(),
 											"deleted": true,
 										}
 									},
@@ -262,24 +271,24 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 								)
 								.await;
 						if let Result::Err(err) = res {
-							error!(object_id = ?object_id, tx = ?item.digest, "failed to delete: {}", err);
+							error!(object_id = ?item.object_id, "failed to delete: {}", err);
 							yield (StepStatus::Err, item);
 						} else {
 							yield (StepStatus::Ok, item);
 						}
 					}
-					Created { object_id, version, .. } | Mutated { object_id, version, .. } => {
-						info!(object_id = ?object_id, version = ?version, tx = ?item.digest, "upserting object");
+					Created | Mutated => {
+						info!(object_id = ?item.object_id, version = ?item.version, "upserting object");
 						// we will only upsert and object if this current version is higher than any previously stored one
 						// (if the object has already been deleted, we still allow setting any other fields, including
 						// any previously valid full object state... probably not needed, but also not incorrect)
 						let res = collection
 								.update_one(
-									doc! { "_id": object_id.to_string(), "version": { "$lt": version.to_string() } },
+									doc! { "_id": item.object_id.to_string(), "version": { "$lt": item.version.to_string() } },
 									doc! {
 										"$set": {
-											"_id": object_id.to_string(),
-											"version": version.to_string(),
+											"_id": item.object_id.to_string(),
+											"version": item.version.to_string(),
 											"object": bson::to_bson(item.object.as_ref().unwrap()).unwrap().as_document().unwrap(),
 										}
 									},
@@ -287,13 +296,12 @@ pub async fn load<S: Stream<Item = ObjectSnapshot>>(
 								)
 								.await;
 						if let Result::Err(err) = res {
-							error!(object_id = ?object_id, version = ?version, tx = ?item.digest, "failed to upsert: {}", err);
+							error!(object_id = ?item.object_id, version = ?item.version, "failed to upsert: {}", err);
 							yield (StepStatus::Err, item);
 						} else {
 							yield (StepStatus::Ok, item);
 						}
 					}
-					_ => {}
 				}
 			}
 		}
