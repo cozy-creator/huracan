@@ -9,7 +9,7 @@ use async_stream::stream;
 use bson::{doc, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
-use mongodb::{options::UpdateOptions, Collection};
+use mongodb::Database;
 use sui_sdk::{
 	apis::ReadApi,
 	rpc_types::{
@@ -27,6 +27,11 @@ use crate::_prelude::*;
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
+// we can easily do batches of 256 (which is the max I tested), but then we're working so fast
+// that the try_multi_get_parsed_past_object() endpoint is complaining that we're working it too hard!
+// 64 seems more or less fine, though
+// TODO cycle through multiple RPC providers for that call, so we can crank up the batch size here!
+const MONGODB_BATCH_SIZE: usize = 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Change {
@@ -236,73 +241,91 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	}
 }
 
-pub async fn load<S: Stream<Item = ObjectSnapshot>>(
+pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	stream: S,
-	collection: Collection<ObjectSnapshot>,
-) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> {
-	let stream = stream.chunks_timeout(64, Duration::from_millis(1_000));
+	db: &'a Database,
+	collection_name: &'a str,
+) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
+	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE, Duration::from_millis(1_000));
 
 	stream! {
 		for await chunk in stream {
-			// for now mongo's rust driver doesn't offer a way to do proper bulk querying / batching
-			// there's only an API for inserting many, but not for updating or deleting many, and
-			// neither an API that lets us do all of those within a single call
-			// so in order to work around that, we do the following:
-			// group items by the type of query they need to execute, and run each of those groups in one call each
-			// we also have to provide our own bulk update + delete methods, based on the db.run_command API
-			for item in chunk {
-				use Change::*;
-				match item.change {
-					Deleted => {
-						info!(object_id = ?item.object_id, "deleting object");
-						// we're assuming each object id will ever exist only once, so when deleting
-						// we don't check for previous versions
-						// we execute the delete, whenever it may come in, and it's final
-						let res = collection
-								.update_one(
-									doc! { "_id": item.object_id.to_string() },
-									doc! {
-										"$set": {
-											"_id": item.object_id.to_string(),
-											"version": item.version.to_string(),
-											"deleted": true,
-										}
+			let mut retries_left = 2;
+			loop {
+				// for now mongo's rust driver doesn't offer a way to directly do bulk updates / batching
+				// there's a high-level API only for inserting many, but not for updating or deleting many,
+				// and neither for mixing all of those easily
+				// but what it does provide is the generic run_command() method,
+				let updates = chunk.iter().map(|item| {
+					let v = item.version.to_string();
+					// FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
+					let v_ = i64::from_str_radix(&v[2..], 16).unwrap();
+					match item.change {
+						Change::Deleted => {
+							// we're assuming each object id will ever exist only once, so when deleting
+							// we don't check for previous versions
+							// we execute the delete, whenever it may come in, and it's final
+							doc! {
+								"q": doc! { "_id": item.object_id.to_string() },
+								"u": doc! {
+									"$set": {
+										"_id": item.object_id.to_string(),
+										"version": v,
+										"version_": v_,
+										"deleted": true,
 									},
-									UpdateOptions::builder().upsert(true).build(),
-								)
-								.await;
-						if let Result::Err(err) = res {
-							error!(object_id = ?item.object_id, "failed to delete: {}", err);
-							yield (StepStatus::Err, item);
-						} else {
-							yield (StepStatus::Ok, item);
+								},
+								"upsert": true,
+								"multi": false,
+							}
+						}
+						Change::Created | Change::Mutated => {
+							// we will only upsert and object if this current version is higher than any previously stored one
+							// (if the object has already been deleted, we still allow setting any other fields, including
+							// any previously valid full object state... probably not needed, but also not incorrect)
+							let mut c = Cursor::new(item.object.as_ref().unwrap());
+							doc! {
+								"q": doc! { "_id": item.object_id.to_string() },
+								// use an aggregation pipeline in our update, so that we can conditionally update
+								// the version and object only if the previous version was lower than our current one
+								"u": vec![doc! {
+									"$set": {
+										"_id": item.object_id.to_string(),
+										"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
+										"version_": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v_, "else": "$version_" }},
+										"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
+									},
+								}],
+								"upsert": true,
+								"multi": false,
+							}
 						}
 					}
-					Created | Mutated => {
-						info!(object_id = ?item.object_id, version = ?item.version, "upserting object");
-						// we will only upsert and object if this current version is higher than any previously stored one
-						// (if the object has already been deleted, we still allow setting any other fields, including
-						// any previously valid full object state... probably not needed, but also not incorrect)
-						let mut doc_reader = Cursor::new(item.object.as_ref().unwrap());
-						let res = collection
-								.update_one(
-									doc! { "_id": item.object_id.to_string(), "version": { "$lt": item.version.to_string() } },
-									doc! {
-										"$set": {
-											"_id": item.object_id.to_string(),
-											"version": item.version.to_string(),
-											"object": Document::from_reader(&mut doc_reader).unwrap(),
-										}
-									},
-									UpdateOptions::builder().upsert(true).build(),
-								)
-								.await;
-						if let Result::Err(err) = res {
-							error!(object_id = ?item.object_id, version = ?item.version, "failed to upsert: {}", err);
-							yield (StepStatus::Err, item);
-						} else {
+				}).collect::<Vec<_>>();
+				let n = updates.len();
+				let res = db.run_command(doc! {
+					"update": collection_name,
+					"updates": updates,
+				}, None).await;
+				match res {
+					Ok(res) => {
+						// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
+						if res.get_i32("n").unwrap() != n as i32 {
+							panic!("failed to execute at least one of the upserts: {:#?}", res.get_array("writeErrors").unwrap());
+						}
+						info!("executed mongo batch with {} items, resulting in {} modified documents", n, res.get_i32("nModified").unwrap());
+						for item in chunk {
 							yield (StepStatus::Ok, item);
 						}
+						break
+					}
+					Err(err) => {
+						// the whole thing failed; retry a few times, then assume it's a bug
+						if retries_left == 0 {
+							panic!("final attempt to run mongo batch failed: {:?}", err);
+						}
+						warn!("error running mongo batch, will retry {} more times: {:?}", retries_left, err);
+						retries_left -= 1;
 					}
 				}
 			}

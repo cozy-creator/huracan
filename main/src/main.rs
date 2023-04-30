@@ -118,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
 				let client = Client::with_options(client_options)?;
 				let db = client.database(&cfg.mongo.database);
 
-				let items = etl::load(items, db.collection(&cfg.mongo.objects.collection)).await;
+				let items = etl::load(items, &db, &cfg.mongo.objects.collection).await;
 
 				pin!(items);
 				while let Some((status, item)) = items.next().await {
