@@ -94,9 +94,9 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 							if page.next_cursor.is_none() {
 								// TODO if we had an API that could give us the prev/next tx digests for any given tx digest
 								//		we could solve this a little more elegantly!
-								info!("no next page info from sui, will sleep for 10s, then try to find the next page...");
+								info!("no next page info from sui, will try to find the next page after a short timeout...");
 								skip_page = true;
-								tokio::time::sleep(Duration::from_millis(10_000)).await;
+								tokio::time::sleep(Duration::from_millis(500)).await;
 							} else {
 								skip_page = false;
 								on_next_page(cursor.clone(), page.next_cursor.unwrap());
