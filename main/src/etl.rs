@@ -213,6 +213,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					}
 				}
 			}
+			// (the following note applies if we're not equipped to handle out-of-order changes/deletes, but at least at this point we are)
 			// send in deleted items last, to ensure we don't re-insert any object that was just deleted
 			// just because they were processed as part of the same chunk of our stream here
 			// ideally we would execute these exactly in order, but that would require more implementation
