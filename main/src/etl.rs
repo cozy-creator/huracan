@@ -35,7 +35,7 @@ const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
 // that the try_multi_get_parsed_past_object() endpoint is complaining that we're working it too hard!
 // 64 seems more or less fine, though
 // TODO cycle through multiple RPC providers for that call, so we can crank up the batch size here!
-const MONGODB_BATCH_SIZE: usize = 64;
+const MONGODB_BATCH_SIZE: usize = 256;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Change {
