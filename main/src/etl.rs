@@ -83,6 +83,7 @@ pub struct ClientPool {
 
 #[derive(Clone)]
 pub struct Client {
+	id:      usize,
 	sui:     SuiClient,
 	backoff: Option<(Instant, u8)>,
 	reqs:    u64,
@@ -97,7 +98,7 @@ impl Client {
 impl ClientPool {
 	pub async fn new(urls: Vec<String>) -> Result<Self> {
 		let mut clients = Vec::with_capacity(urls.len());
-		clients.push(Self::make_client(&urls[0]).await?);
+		clients.push(Self::make_client(0, &urls[0]).await?);
 		Ok(Self { urls, clients })
 	}
 
@@ -131,9 +132,9 @@ impl ClientPool {
 		try_multi_get_parsed_past_object(past_objects.clone(), options.clone()).await
 	}
 
-	async fn make_client(url: &str) -> Result<Client> {
+	async fn make_client(id: usize, url: &str) -> Result<Client> {
 		let sui = SuiClientBuilder::default().build(url).await?;
-		Ok(Client { sui, backoff: None, reqs: 0 })
+		Ok(Client { id, sui, backoff: None, reqs: 0 })
 	}
 }
 

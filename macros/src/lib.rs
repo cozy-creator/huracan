@@ -73,8 +73,9 @@ pub fn with_client_rotation(_attr: proc_macro::TokenStream, item: proc_macro::To
 			// increment backoff
 			{
 				let f = client.backoff.map(|b| b.1).unwrap_or(0);
-				let backoff_dur = Duration::from_millis(2u64.pow(f as u32)) * 250;
-				client.backoff = Some((Instant::now() + backoff_dur, f + 1));
+				let backoff_millis = (2u64.pow(f as u32) * 250).min(10_000);
+				info!("hit rate limit at {}; backing off for {}ms (factor {})", self.urls[client.id], backoff_millis, f);
+				client.backoff = Some((Instant::now() + Duration::from_millis(backoff_millis), f + 1));
 			}
 
 			// rotate client priority through sorting by backoff timer (first available client at ix 0)
@@ -86,7 +87,7 @@ pub fn with_client_rotation(_attr: proc_macro::TokenStream, item: proc_macro::To
 				let spawned_new_client = if self.urls.len() > self.clients.len() {
 					// new client from next url, set as first to use
 					let ix = self.clients.len();
-					match Self::make_client(&self.urls[ix]).await {
+					match Self::make_client(ix, &self.urls[ix]).await {
 						Ok(client) => {
 							self.clients.insert(0, client);
 							true
