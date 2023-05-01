@@ -1,5 +1,6 @@
 #![feature(drain_filter)]
 #![feature(slice_group_by)]
+#![feature(let_chains)]
 
 #[macro_use]
 extern crate serde;
@@ -13,12 +14,15 @@ use mongodb::{
 	options::{ClientOptions, ServerApi, ServerApiVersion},
 	Client,
 };
-use sui_sdk::SuiClientBuilder;
 use sui_types::digests::TransactionDigest;
 use tokio::pin;
 use tracing_subscriber::filter::EnvFilter;
 
-use crate::{_prelude::*, cli::Commands, etl::StepStatus};
+use crate::{
+	_prelude::*,
+	cli::Commands,
+	etl::{ClientPool, StepStatus},
+};
 
 mod _prelude;
 mod cli;
@@ -65,8 +69,7 @@ async fn main() -> anyhow::Result<()> {
 
 	let rx_term = setup_ctrl_c_listener();
 
-	let sui_client = SuiClientBuilder::default().build(cfg.sui.api.http.clone()).await?;
-	let sui = sui_client.read_api();
+	let sui = ClientPool::new(cfg.sui.api.urls).await?;
 
 	match args.command {
 		Commands::Extract(_) => {
@@ -80,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
 		}
 		Commands::All(aargs) => {
 			let start_from = aargs.start_from.map(|s| TransactionDigest::from_str(&s).unwrap());
-			let items = etl::extract(&sui, rx_term, start_from, |completed, next| {
+			let items = etl::extract(sui.clone(), rx_term, start_from, |completed, next| {
 				info!(
 					"page done: {}, next page: {}",
 					completed.map(|d| d.to_string()).unwrap_or("(initial)".into()),
@@ -89,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
 			})
 			.await?;
 
-			let items = etl::transform(items, &sui).await;
+			let items = etl::transform(items, sui.clone()).await;
 
 			// filter out any failures and stop there, at least for now, so we can debug + fix if needed
 			// or else add handling for "normal" error conditions afterwards

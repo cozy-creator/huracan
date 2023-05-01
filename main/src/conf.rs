@@ -30,7 +30,7 @@ pub struct LogConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiApiConfig {
-	pub http: String,
+	pub urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

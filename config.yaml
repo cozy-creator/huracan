@@ -1,5 +1,5 @@
 log:
- # fancy some colors? - disable if redirect to file is intended
+  # fancy some colors? - disable if redirect to file is intended
   ansi: true
   # base-line log level
   level: info
@@ -15,4 +15,6 @@ mongo:
 
 sui:
   api:
-    http: "https://rpc-testnet.suiscan.xyz:443"
+    urls:
+      - "https://rpc-testnet.suiscan.xyz:443"
+      - "https://sui-testnet.nodeinfra.com:443/"

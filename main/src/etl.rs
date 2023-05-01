@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+use async_recursion::async_recursion;
 use async_stream::stream;
 use bson::{doc, Document};
 use futures::Stream;
@@ -12,10 +13,13 @@ use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::Database;
 use sui_sdk::{
 	apis::ReadApi,
+	error::SuiRpcResult,
 	rpc_types::{
 		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions,
 		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
+		TransactionBlocksPage,
 	},
+	SuiClient, SuiClientBuilder,
 };
 use sui_types::{
 	base_types::{ObjectID, SequenceNumber},
@@ -71,8 +75,150 @@ impl ObjectSnapshot {
 	}
 }
 
+#[derive(Clone)]
+pub struct ClientPool {
+	urls:    Vec<String>,
+	clients: Vec<Client>,
+	ix:      usize,
+}
+
+#[derive(Clone)]
+pub struct Client {
+	id:      usize,
+	sui:     SuiClient,
+	backoff: Option<(Instant, u8)>,
+	reqs:    u64,
+}
+
+impl Client {
+	fn read_api(&self) -> &ReadApi {
+		self.sui.read_api()
+	}
+}
+
+impl ClientPool {
+	pub async fn new(urls: Vec<String>) -> Result<Self> {
+		let mut clients = Vec::with_capacity(urls.len());
+		clients.push(Self::make_client(0, &urls[0]).await?);
+		Ok(Self { urls, clients, ix: 0 })
+	}
+
+	pub async fn query_transaction_blocks(
+		&mut self,
+		query: SuiTransactionBlockResponseQuery,
+		cursor: Option<TransactionDigest>,
+		limit: Option<usize>,
+		descending_order: bool,
+	) -> SuiRpcResult<TransactionBlocksPage> {
+		self.impl_query_transaction_blocks(query, cursor, limit, descending_order).await
+	}
+
+	#[async_recursion]
+	async fn impl_query_transaction_blocks(
+		&mut self,
+		query: SuiTransactionBlockResponseQuery,
+		cursor: Option<TransactionDigest>,
+		limit: Option<usize>,
+		descending_order: bool,
+	) -> SuiRpcResult<TransactionBlocksPage> {
+		// for this call, we can stay on the current client for as long as it works well for us
+		// ("works well": for now this just means not giving us a 429 error, but in the future we may
+		// want to track response times (adjusted for # of results or response size returned, potentially))
+
+		// if there's backoff active for the current client, even before trying it, we already
+		// want to start the rotation
+		// before attempting to find the next best client, we want to sort them by when the next request
+		// is allowed, according to their active backoff, if any
+		// clients without an active backoff come first
+		// use stable sort
+
+		// if we did not find a suitable client to rotate to, we want to:
+		// 1) spawn the next client, if any left, and use that
+		// 2) select the client whose backoff interval is expiring the soonest
+
+		let client = &mut self.clients[0];
+		let api = client.read_api();
+		let res = api.query_transaction_blocks(query.clone(), cursor, limit, descending_order).await;
+		client.reqs += 1;
+		let limited = if let Err(sui_sdk::error::Error::RpcError(jsonrpsee::core::Error::Transport(err))) = res.as_ref() && format!("{}", err).contains("429") {
+			true
+		} else {
+			false
+		};
+		if !limited {
+			// client is OK, so reset backoff, if any
+			client.backoff = None;
+			return res
+		}
+
+		// we were limited, execute backoff handling + client rotation!
+		// increment backoff
+		{
+			let f = client.backoff.map(|b| b.1).unwrap_or(0);
+			let backoff_dur = Duration::from_millis(2u64.pow(f as u32)) * 250;
+			client.backoff = Some((Instant::now() + backoff_dur, f + 1));
+		}
+
+		// rotate client priority through sorting by backoff timer (first available client at ix 0)
+		self.clients.sort_by_key(|c| c.backoff.map(|(t, _)| t));
+
+		// all clients in backoff?
+		if let Some((wait_until, _)) = self.clients[0].backoff {
+			// any more clients we can create?
+			let spawned_new_client = if self.urls.len() > self.clients.len() {
+				// new client from next url, set as first to use
+				let ix = self.clients.len();
+				match Self::make_client(ix, &self.urls[ix]).await {
+					Ok(client) => {
+						self.clients.insert(0, client);
+						true
+					}
+					Err(err) => {
+						warn!(
+							"failed to create additional sui client for url #{}: {} -- {} -- will try again later!",
+							ix, self.urls[ix], err
+						);
+						false
+					}
+				}
+			} else {
+				false
+			};
+			if !spawned_new_client {
+				// put backoff into practice: sleep if not past wait time
+				let sleep_for = wait_until - Instant::now();
+				if sleep_for.as_millis() > 0 {
+					tokio::time::sleep(sleep_for).await;
+				}
+			}
+			return self.impl_query_transaction_blocks(query.clone(), cursor, limit, descending_order).await
+		}
+		res
+	}
+
+	pub async fn try_get_parsed_past_object(
+		&self,
+		object_id: ObjectID,
+		version: SequenceNumber,
+		options: SuiObjectDataOptions,
+	) -> SuiRpcResult<SuiPastObjectResponse> {
+	}
+
+	pub async fn try_multi_get_parsed_past_object(
+		&self,
+		past_objects: Vec<SuiGetPastObjectRequest>,
+		options: SuiObjectDataOptions,
+	) -> SuiRpcResult<Vec<SuiPastObjectResponse>> {
+	}
+
+	async fn make_client(id: usize, url: &str) -> Result<Client> {
+		let sui = SuiClientBuilder::default().build(url).await?;
+		Ok(Client { id, sui, backoff: None, reqs: 0 })
+	}
+}
+
 pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + 'a>(
-	sui: &'a ReadApi,
+	mut sui: ClientPool,
 	mut rx_term: tokio::sync::oneshot::Receiver<()>,
 	start_from: Option<TransactionDigest>,
 	on_next_page: P,
@@ -148,7 +294,7 @@ impl Display for StepStatus {
 
 pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	stream: S,
-	sui: &'a ReadApi,
+	sui: ClientPool,
 ) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
 	// batch incoming items so we can amortize the cost of sui api calls,
 	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their

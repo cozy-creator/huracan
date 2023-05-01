@@ -10,21 +10,23 @@ figment = { version = "0.10", features = ["yaml", "env"] }
 clap = "4.2.1"
 humanize-rs = "0.1"
 tracing = "0.1"
-tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-futures = "~0.2.5"
 
 tokio = { version = "1.27.0", features = ["full"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.33.0" }
 sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-0.33.0" }
+jsonrpsee = "0.16.2"
 pulsar = "5.1"
 mongodb = "2.5.0"
 
 serde_json = "1.0"
-serde = {version = "~1.0.125", features = ["derive"] }
+serde = { version = "~1.0.125", features = ["derive"] }
 dotenv = "0.15.0"
 bson = "2.6.1"
 
-macros = {path = "../macros"}
+macros = { path = "../macros" }
 futures-util = "0.3.28"
 async-stream = "0.3.5"
 futures-batch = "0.6.1"
+async-recursion = "1.0.4"

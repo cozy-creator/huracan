@@ -9959,6 +9959,7 @@ name = "sui-indexer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-recursion",
  "async-stream",
  "bson",
  "clap 4.2.5",
@@ -9968,6 +9969,7 @@ dependencies = [
  "futures-batch",
  "futures-util",
  "humanize-rs",
+ "jsonrpsee",
  "macros",
  "mongodb",
  "pulsar",
