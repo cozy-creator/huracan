@@ -5,3 +5,4 @@ log*
 Dockerfile
 .dockerignore
 .git
+.env
