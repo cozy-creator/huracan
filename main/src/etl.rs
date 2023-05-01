@@ -358,8 +358,11 @@ pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 								"u": vec![doc! {
 									"$set": {
 										"_id": item.object_id.to_string(),
+										// version_ must be added first, so that it's available in the next items in the pipeline
+										// it has a more complex condition, so it's also added if the field doesn't exist yet
+										// afterwards, the other fields can rely on it being present
+										"version_": {"$cond": { "if": { "$or": [ { "$lt": [ "$version_", v_ ] }, { "$eq": [ { "$type": "$version_" }, "missing" ] } ] }, "then": v_, "else": "$version_" }},
 										"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
-										"version_": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v_, "else": "$version_" }},
 										"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
 									},
 								}],
