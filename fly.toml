@@ -1,7 +1,10 @@
 app = "sui-indexer-denis"
-# the default signal
+primary_region = "fra"
 kill_signal = "SIGINT"
-kill_timeout = 10
+kill_timeout = "10s"
+
+[experimental]
+  auto_rollback = true
 
 [env]
-APP_MONGO_OBJECTS_COLLECTION="fly_denis_objects"
+  APP_MONGO_OBJECTS_COLLECTION = "fly_denis_objects"
