@@ -5428,6 +5428,7 @@ dependencies = [
  "typed-builder",
  "uuid",
  "webpki-roots",
+ "zstd",
 ]
 
 [[package]]

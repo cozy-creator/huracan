@@ -11,7 +11,7 @@ use cli::Args;
 use conf::AppConfig;
 use dotenv::dotenv;
 use mongodb::{
-	options::{ClientOptions, ServerApi, ServerApiVersion},
+	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Client,
 };
 use sui_types::digests::TransactionDigest;
@@ -117,6 +117,8 @@ async fn main() -> anyhow::Result<()> {
 
 			if !aargs.no_mongo {
 				let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
+				// use zstd compression for messages
+				client_options.compressors = Some(vec![Compressor::Zstd { level: Some(1) }]);
 				client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
 				let client = Client::with_options(client_options)?;
 				let db = client.database(&cfg.mongo.database);
