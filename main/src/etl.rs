@@ -1,4 +1,5 @@
 use std::{
+	cmp::Ordering,
 	fmt::{Display, Formatter},
 	io::Cursor,
 	iter::zip,
@@ -313,6 +314,39 @@ pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 	db: &'a Database,
 	collection_name: &'a str,
 ) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
+	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE * 10, Duration::from_millis(1_000));
+
+	let stream = stream! {
+		for await mut chunk in stream {
+			// drop intermediate updates to the same objects:
+			// group updates by object id, retain only the update with the higest version
+			chunk.sort_unstable_by(|item1, item2| {
+				// compare by object_id first, then by version in reverse order, so that the
+				// item with the highest version comes first
+				match item1.object_id.cmp(&item2.object_id) {
+					Ordering::Equal => item2.version.cmp(&item1.version),
+					res => res
+				}
+			});
+			let chunk_len = chunk.len();
+			let mut skipped = 0;
+			let mut oid = ObjectID::ZERO;
+			for item in chunk.into_iter() {
+				if item.object_id != oid {
+					oid = item.object_id;
+					yield item;
+				} else {
+					skipped += 1;
+				}
+				// skip all with same oid after the first, as the highest version comes first,
+				// and it's the only one we're interested in
+			}
+			if skipped > 0 {
+				info!(">> skipped {} intermediate updates out of {} ({}%)", skipped, chunk_len, (skipped as f64 / chunk_len as f64 * 100.0).round() as u64);
+			}
+		}
+	};
+
 	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE, Duration::from_millis(1_000));
 
 	stream! {
