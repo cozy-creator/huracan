@@ -417,7 +417,19 @@ pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 						if res.get_i32("n").unwrap() != n as i32 {
 							panic!("failed to execute at least one of the upserts: {:#?}", res.get_array("writeErrors").unwrap());
 						}
-						info!("executed mongo batch with {} items, resulting in {} modified documents", n, res.get_i32("nModified").unwrap());
+						let inserted = if let Ok(upserted) = res.get_array("upserted") {
+							upserted.len()
+						} else {
+							0
+						};
+						let modified = res.get_i32("nModified").unwrap();
+						let missing = n - (inserted + modified as usize);
+						let missing_info = if missing > 0 {
+							format!(" (and {} items that did not lead to an insert or update)", missing)
+						} else {
+							String::new()
+						};
+						info!("|> {} updated / {} created / {} total mongo batch items{}", modified, inserted, n, missing_info);
 						for item in chunk {
 							yield (StepStatus::Ok, item);
 						}
