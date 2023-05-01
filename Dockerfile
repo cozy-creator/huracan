@@ -14,5 +14,6 @@ RUN cargo build $BUILD_TYPE --bin sui-indexer
 FROM debian:bullseye as runtime
 WORKDIR /app
 COPY --from=builder /app/target/*/sui-indexer /usr/local/bin
+RUN apt-get update && apt-get -q -y install ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY ./config.yaml .
 ENTRYPOINT ["sui-indexer", "all"]
