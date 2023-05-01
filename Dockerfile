@@ -8,7 +8,7 @@ FROM rustlang/rust:nightly as builder
 RUN apt-get update && apt-get -q -y install clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
-RUN cargo build --bin $BUILD_TYPE sui-indexer
+RUN cargo build $BUILD_TYPE --bin sui-indexer
 
 
 FROM debian:bullseye as runtime
