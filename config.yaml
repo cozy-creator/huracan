@@ -16,5 +16,5 @@ mongo:
 sui:
   api:
     urls:
-      - "https://rpc-testnet.suiscan.xyz:443"
       - "https://sui-testnet.nodeinfra.com:443/"
+      - "https://rpc-testnet.suiscan.xyz:443"
