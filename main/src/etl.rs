@@ -425,11 +425,11 @@ pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 						let modified = res.get_i32("nModified").unwrap();
 						let missing = n - (inserted + modified as usize);
 						let missing_info = if missing > 0 {
-							format!(" (and {} items that did not lead to an insert or update)", missing)
+							format!(" // {} items without effect!", missing)
 						} else {
 							String::new()
 						};
-						info!("|> {} updated / {} created / {} total mongo batch items{}", modified, inserted, n, missing_info);
+						info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
 						for item in chunk {
 							yield (StepStatus::Ok, item);
 						}
