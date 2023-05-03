@@ -1,5 +1,5 @@
+extract: { }
 # instead of using --start-from CLI arg you can also use this:
-#extract:
 #    from: <tx digest>
 
 log:
