@@ -83,12 +83,19 @@ async fn main() -> anyhow::Result<()> {
 		}
 		Commands::All(aargs) => {
 			let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
-			let items = etl::extract(sui.clone(), rx_term, start_from, |completed, next| {
-				info!(
-					"page done: {}, next page: {}",
-					completed.map(|d| d.to_string()).unwrap_or("(initial)".into()),
-					next
-				);
+			let items = etl::extract(sui.clone(), rx_term, start_from, {
+				let mut n = 0u64;
+				move |completed, next| {
+					n += 1;
+					if n % 1000 == 0 {
+						info!(
+							"{} pages done! completed page: {}, next page: {}",
+							n,
+							completed.map(|d| d.to_string()).unwrap_or("(initial)".into()),
+							next
+						);
+					}
+				}
 			})
 			.await?;
 

@@ -139,11 +139,11 @@ impl ClientPool {
 	}
 }
 
-pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + 'a>(
+pub async fn extract<'a, P: FnMut(Option<TransactionDigest>, TransactionDigest) + 'a>(
 	mut sui: ClientPool,
 	mut rx_term: tokio::sync::oneshot::Receiver<()>,
 	start_from: Option<TransactionDigest>,
-	on_next_page: P,
+	mut on_next_page: P,
 ) -> Result<impl Stream<Item = ObjectSnapshot> + 'a> {
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
