@@ -165,10 +165,13 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 									if let Some(changes) = tx_block.object_changes {
 										for change in changes {
 											if let Some((change, object_type)) = ObjectSnapshot::from(change) {
-												// skip objects of type "coin"
-												if object_type.starts_with("0x2::coin::Coin") {
-													continue
-												}
+												// step 1 object skipping filters:
+												// for now we want all objects, might handle these differently later
+
+												// // skip objects of type "coin"
+												// if object_type.starts_with("0x2::coin::Coin") {
+												// 	continue
+												// }
 												yield change;
 											}
 										}
