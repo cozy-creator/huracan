@@ -234,10 +234,15 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 		show_storage_rebate:       true,
 	};
 
-	fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<SuiObjectData> {
+	fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<(SuiObjectData, Vec<u8>)> {
 		use SuiPastObjectResponse::*;
 		match res {
-			VersionFound(obj) => return Some(obj),
+			VersionFound(obj) => {
+				let mut bytes = Vec::with_capacity(4096);
+				let bson = bson::to_bson(&obj).unwrap();
+				bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+				return Some((obj, bytes))
+			}
 			ObjectDeleted(o) => {
 				// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
 				warn!(object_id = ?o.object_id, version = ?o.version, "object not available: object has been deleted");
@@ -273,8 +278,8 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 								yield (StepStatus::Err, snapshot);
 							},
 							Ok(res) => {
-								if let Some(obj) = parse_past_object_response(res) {
-									snapshot.object = Some(bson::to_vec(&obj).unwrap());
+								if let Some((obj, bytes)) = parse_past_object_response(res) {
+									snapshot.object = Some(bytes);
 									yield (StepStatus::Ok, snapshot);
 								}
 							}
@@ -290,8 +295,8 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					}
 					for (mut snapshot, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
-						if let Some(obj) = parse_past_object_response(res) {
-							snapshot.object = Some(bson::to_vec(&obj).unwrap());
+						if let Some((obj, bytes)) = parse_past_object_response(res) {
+							snapshot.object = Some(bytes);
 							yield (StepStatus::Ok, snapshot);
 						}
 					}
