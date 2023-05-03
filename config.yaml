@@ -1,3 +1,7 @@
+# instead of using --start-from CLI arg you can also use this:
+#extract:
+#    from: <tx digest>
+
 log:
   # fancy some colors? - disable if redirect to file is intended
   ansi: true

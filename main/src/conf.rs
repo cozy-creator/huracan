@@ -21,6 +21,12 @@ pub struct MongoConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ExtractConfig {
+	pub from: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogConfig {
 	pub level:  CLevel,
 	pub ansi:   bool,
@@ -81,9 +87,10 @@ impl<'de> Deserialize<'de> for CDuration {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
-	pub log:   LogConfig,
-	pub mongo: MongoConfig,
-	pub sui:   SuiConfig,
+	pub extract: ExtractConfig,
+	pub log:     LogConfig,
+	pub mongo:   MongoConfig,
+	pub sui:     SuiConfig,
 }
 
 impl AppConfig {

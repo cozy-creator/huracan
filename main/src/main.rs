@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 			panic!("only 'all' command is currently implemented, executing all steps in a single process pipeline!")
 		}
 		Commands::All(aargs) => {
-			let start_from = aargs.start_from.map(|s| TransactionDigest::from_str(&s).unwrap());
+			let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
 			let items = etl::extract(sui.clone(), rx_term, start_from, |completed, next| {
 				info!(
 					"page done: {}, next page: {}",
