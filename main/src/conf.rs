@@ -83,8 +83,7 @@ impl<'de> Deserialize<'de> for CDuration {
 pub struct AppConfig {
 	pub log:   LogConfig,
 	pub mongo: MongoConfig,
-
-	pub sui: SuiConfig,
+	pub sui:   SuiConfig,
 }
 
 impl AppConfig {
