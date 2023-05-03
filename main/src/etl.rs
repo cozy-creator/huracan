@@ -164,7 +164,7 @@ pub async fn extract<'a, P: Fn(Option<TransactionDigest>, TransactionDigest) + '
 								for tx_block in page.data {
 									if let Some(changes) = tx_block.object_changes {
 										for change in changes {
-											if let Some((change, object_type)) = ObjectSnapshot::from(change) {
+											if let Some((change, _object_type)) = ObjectSnapshot::from(change) {
 												// step 1 object skipping filters:
 												// for now we want all objects, might handle these differently later
 
@@ -281,7 +281,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 								yield (StepStatus::Err, snapshot);
 							},
 							Ok(res) => {
-								if let Some((obj, bytes)) = parse_past_object_response(res) {
+								if let Some((_obj, bytes)) = parse_past_object_response(res) {
 									snapshot.object = Some(bytes);
 									yield (StepStatus::Ok, snapshot);
 								}
@@ -298,7 +298,7 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					}
 					for (mut snapshot, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
-						if let Some((obj, bytes)) = parse_past_object_response(res) {
+						if let Some((_obj, bytes)) = parse_past_object_response(res) {
 							snapshot.object = Some(bytes);
 							yield (StepStatus::Ok, snapshot);
 						}
