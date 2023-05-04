@@ -3,46 +3,63 @@ use std::{
 	fmt::{Display, Formatter},
 	io::Cursor,
 	iter::zip,
+	sync::atomic::{AtomicBool, Ordering::Relaxed},
 };
 
 use anyhow::Result;
+use async_channel::Sender as ACSender;
 use async_stream::stream;
 use bson::{doc, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
+use futures_util::SinkExt;
 use macros::with_client_rotation;
-use mongodb::Database;
+use mongodb::{
+	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
+	Database,
+};
+use pulsar::{Pulsar, TokioExecutor};
+use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::{
 	apis::ReadApi,
 	error::SuiRpcResult,
 	rpc_types::{
 		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions,
-		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
+		SuiObjectResponse, SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
 		TransactionBlocksPage,
 	},
 	SuiClient, SuiClientBuilder,
 };
 use sui_types::{
-	base_types::{ObjectID, SequenceNumber},
+	base_types::{ObjectID, SequenceNumber, VersionNumber},
 	digests::TransactionDigest,
+	error::SuiObjectResponseError,
+	messages_checkpoint::CheckpointSequenceNumber,
+	query::TransactionFilter,
 };
+use tokio::{pin, sync::mpsc::Sender as TSender};
 
-use crate::_prelude::*;
+use crate::{_prelude::*, conf::AppConfig};
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
-// we can easily do batches of 256 (which is the max I tested), but then we're working so fast
-// that the try_multi_get_parsed_past_object() endpoint is complaining that we're working it too hard!
-// 64 seems more or less fine, though
-// TODO cycle through multiple RPC providers for that call, so we can crank up the batch size here!
-const MONGODB_BATCH_SIZE: usize = 256;
+const MONGODB_BATCH_SIZE: usize = 512;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Change {
 	Created,
 	Mutated,
 	Deleted,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
+pub struct ObjectItem {
+	pub cp:       CheckpointSequenceNumber,
+	pub deletion: bool,
+	pub id:       ObjectID,
+	pub version:  SequenceNumber,
+	pub bytes:    Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
@@ -82,12 +99,18 @@ pub struct ClientPool {
 	clients: Vec<Client>,
 }
 
-#[derive(Clone)]
 pub struct Client {
 	id:      usize,
 	sui:     SuiClient,
 	backoff: Option<(Instant, u8)>,
 	reqs:    u64,
+}
+
+impl Clone for Client {
+	// reset backoff and reqs
+	fn clone(&self) -> Self {
+		Self { id: self.id, sui: self.sui.clone(), backoff: None, reqs: 0 }
+	}
 }
 
 impl Client {
@@ -104,6 +127,11 @@ impl ClientPool {
 	}
 
 	#[with_client_rotation]
+	pub async fn get_latest_checkpoint_sequence_number(&mut self) -> SuiRpcResult<CheckpointSequenceNumber> {
+		get_latest_checkpoint_sequence_number().await
+	}
+
+	#[with_client_rotation]
 	pub async fn query_transaction_blocks(
 		&mut self,
 		query: SuiTransactionBlockResponseQuery,
@@ -112,6 +140,24 @@ impl ClientPool {
 		descending_order: bool,
 	) -> SuiRpcResult<TransactionBlocksPage> {
 		query_transaction_blocks(query.clone(), cursor, limit, descending_order).await
+	}
+
+	#[with_client_rotation]
+	pub async fn get_object_with_options(
+		&mut self,
+		object_id: ObjectID,
+		options: SuiObjectDataOptions,
+	) -> SuiRpcResult<SuiObjectResponse> {
+		get_object_with_options(object_id, options.clone()).await
+	}
+
+	#[with_client_rotation]
+	pub async fn multi_get_object_with_options(
+		&mut self,
+		object_ids: Vec<ObjectID>,
+		options: SuiObjectDataOptions,
+	) -> SuiRpcResult<Vec<SuiObjectResponse>> {
+		multi_get_object_with_options(object_ids.clone(), options.clone()).await
 	}
 
 	#[with_client_rotation]
@@ -136,6 +182,247 @@ impl ClientPool {
 	async fn make_client(id: usize, url: &str) -> Result<Client> {
 		let sui = SuiClientBuilder::default().build(url).await?;
 		Ok(Client { id, sui, backoff: None, reqs: 0 })
+	}
+}
+
+pub async fn fullscan(
+	cfg: &AppConfig,
+	collection: String,
+	mut sui: ClientPool,
+	pulsar: Pulsar<TokioExecutor>,
+	rx_term: tokio::sync::oneshot::Receiver<()>,
+) -> Result<()> {
+	let db = Arc::new(DBWithThreadMode::<SingleThreaded>::open_default("fullscan.tmp.db").unwrap());
+
+	let mongo = {
+		let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
+		// use zstd compression for messages
+		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(1) }]);
+		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+		let client = mongodb::Client::with_options(client_options)?;
+		client.database(&cfg.mongo.database)
+	};
+
+	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as usize;
+	let num_workers = sui.urls.len();
+	let step_size = num_workers;
+	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
+	let (object_ids_tx, object_ids_rx) = async_channel::bounded(1024 * 1024);
+	// for the control channel, we want to add some blocking behavior in case the task acting
+	// on the control messages falls too far behind -- we don't want to process major portions of the
+	// chain without also storing info about our progress so we can resume about where we left off
+	let (cp_control_tx, mut cp_control_rx) = tokio::sync::mpsc::channel(step_size * 2);
+	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
+	let (mongo_tx, mut mongo_rx) = tokio::sync::mpsc::channel(MONGODB_BATCH_SIZE * 4);
+	// handle stopping gracefully
+	let stop = Arc::new(AtomicBool::new(false));
+	tokio::spawn({
+		let stop = stop.clone();
+		async move {
+			let _ = rx_term.await;
+			stop.store(true, Relaxed);
+		}
+	});
+
+	// spawn as many step 1 workers as we have RPC server urls,
+	// let each worker freely balance requests between them
+	for partition in 0..num_workers {
+		tokio::spawn(fullscan_extract(
+			checkpoint_max,
+			step_size,
+			partition,
+			sui.clone(),
+			db.clone(),
+			stop.clone(),
+			object_ids_tx.clone(),
+			cp_control_tx.clone(),
+		));
+	}
+
+	// step 2 workers
+	for _ in 0..num_workers {
+		tokio::spawn({
+			let sui = sui.clone();
+			let mut retries = pulsar
+				.producer()
+				.with_topic(&format!("persistent://public/default/{}_retries", collection))
+				.build()
+				.await?;
+			let object_ids_rx = object_ids_rx.clone();
+			let mongo_tx = mongo_tx.clone();
+
+			async move {
+				let stream = transform(object_ids_rx, sui).await;
+				let stream = stream! {
+					for await (status, item) in stream {
+						if let StepStatus::Err = status {
+							retries.send(item).await.expect("failed to send retry message to pulsar!");
+						} else {
+							yield item;
+						}
+					}
+				};
+				pin!(stream);
+				while let Some(it) = stream.next().await {
+					mongo_tx.send(it).await.expect("passing items from step 2 stream to mongo tokio channel");
+				}
+			}
+		});
+	}
+
+	// step 3: a single worker should be fine as we can run large, efficient batches
+	let mut retries =
+		pulsar.producer().with_topic(&format!("persistent://public/default/{}_retries", collection)).build().await?;
+	// transform tokio receiver to stream
+	let stream = stream! {
+		while let Some(it) = mongo_rx.recv().await {
+			yield it;
+		}
+	};
+	let stream = load(stream, &mongo, &collection).await;
+	let mut completions_left = HashMap::new();
+	pin!(stream);
+	loop {
+		tokio::select! {
+			Some((status, item)) = stream.next() => {
+				let cp = item.cp;
+				if let StepStatus::Err = status {
+					retries.send(item).await.expect("failed to send retry message to pulsar!");
+				}
+				let v = completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64);
+				if *v == 0 {
+					mongo_checkpoint(&mongo, &collection, cp).await;
+					completions_left.remove(&cp);
+				}
+			},
+			Some((cp, num_items)) = cp_control_rx.recv() => {
+				let v = completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64);
+				if *v == 0 {
+					mongo_checkpoint(&mongo, &collection, cp).await;
+					completions_left.remove(&cp);
+				}
+			},
+			// if both branches return None, we're complete
+			else => break,
+		}
+	}
+
+	Ok(())
+}
+
+async fn mongo_checkpoint(db: &Database, collection: &str, cp: CheckpointSequenceNumber) {
+	let mut retries_left = 2;
+	loop {
+		if let Err(err) = db
+			.run_command(
+				doc! {
+					"update": format!("{}_checkpoints", collection),
+					"updates": vec![
+						doc! {
+							// FIXME how do we store a u64 in mongo? this will be an issue when the chain
+							//		 has been running for long enough!
+							"q": doc! { "_id": cp as i64 },
+							"u": doc! { "_id": cp as i64 },
+							"upsert": true,
+						}
+					]
+				},
+				None,
+			)
+			.await
+		{
+			warn!("failed saving checkpoint to mongo: {}", err);
+			if retries_left > 0 {
+				retries_left -= 1;
+				continue
+			}
+			panic!("could not save checkpoint status for checkpoint {} to mongo, aborting!", cp);
+		}
+		break
+	}
+}
+
+async fn fullscan_extract(
+	checkpoint_max: usize,
+	step_size: usize,
+	partition: usize,
+	mut sui: ClientPool,
+	db: Arc<DBWithThreadMode<SingleThreaded>>,
+	stop: Arc<AtomicBool>,
+	object_ids_tx: ACSender<ObjectItem>,
+	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
+) {
+	// walk partitioned checkpoints range from newest to oldest
+	for cp in (1..=checkpoint_max - partition).rev().step_by(step_size) {
+		// do we need to stop?
+		if stop.load(Relaxed) {
+			break
+		}
+		// start fetching all tx blocks for this checkpoint
+		let q = SuiTransactionBlockResponseQuery::new(
+			Some(TransactionFilter::Checkpoint(cp as CheckpointSequenceNumber)),
+			Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
+		);
+		let mut cursor = None;
+		let mut retry_count = 0;
+		let mut num_objects = 0u32;
+
+		loop {
+			let page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
+			match page {
+				Ok(page) => {
+					retry_count = 0;
+					for tx_block in page.data {
+						if let Some(changes) = tx_block.object_changes {
+							for change in changes {
+								use SuiObjectChange::*;
+								let (object_id, version, deleted) = match change {
+									Created { object_id, version, .. } | Mutated { object_id, version, .. } => {
+										(object_id, version, false)
+									}
+									Deleted { object_id, version, .. } => (object_id, version, true),
+									_ => continue,
+								};
+								let k = object_id.as_slice();
+								// known?
+								if let None = db.get_pinned(k).unwrap() {
+									// no, new one, so we mark it as known
+									db.put(k, Vec::new()).unwrap();
+									num_objects += 1;
+									// send to step 2
+									let send_res = object_ids_tx
+										.send(ObjectItem {
+											cp: cp as CheckpointSequenceNumber,
+											deletion: deleted,
+											id: object_id,
+											version,
+											bytes: Default::default(),
+										})
+										.await;
+									if send_res.is_err() {
+										// channel closed, consumers stopped
+										return
+									}
+								}
+							}
+						}
+					}
+					if page.next_cursor.is_none() {
+						// we're done with this cp
+						// send control message about number of expected object tasks from this cp
+						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						break
+					} else {
+						cursor = page.next_cursor;
+					}
+				}
+				Err(err) => {
+					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retry_count);
+					retry_count += 1;
+					tokio::time::sleep(Duration::from_millis(500)).await;
+				}
+			}
+		}
 	}
 }
 
@@ -217,16 +504,52 @@ impl Display for StepStatus {
 	}
 }
 
-pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
+fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
+	if let Some(err) = res.error {
+		use SuiObjectResponseError::*;
+		match err {
+			Deleted { object_id, version, digest: _ } => {
+				warn!(object_id = ?object_id, version = ?version, "object not available: object has been deleted");
+			}
+			NotExists { object_id } => {
+				warn!(object_id = ?object_id, "object not available: object doesn't exist");
+			}
+			Unknown => {
+				warn!(object_id = ?id, "object not available: unknown error");
+			}
+			DisplayError { error } => {
+				warn!(object_id = ?id, "object not available: display error: {}", error);
+			}
+		};
+		return None
+	}
+	if let Some(obj) = res.data {
+		let mut bytes = Vec::with_capacity(4096);
+		let bson = bson::to_bson(&obj).unwrap();
+		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+		return Some((obj.version, bytes))
+	}
+	warn!(object_id = ?id, "neither .data nor .error was set in get_object response!");
+	return None
+}
+
+pub async fn transform<'a, S: Stream<Item = ObjectItem> + 'a>(
 	stream: S,
 	mut sui: ClientPool,
-) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
+) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	// batch incoming items so we can amortize the cost of sui api calls,
 	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their
 	// own batching logic, if necessary (e.g. Pulsar producer will auto-batch transparently, if configured)
 
 	let stream = stream.chunks_timeout(50, Duration::from_millis(1_000));
 
+	transform_batched(stream, sui).await
+}
+
+async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
+	stream: S,
+	mut sui: ClientPool,
+) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	let query_opts = SuiObjectDataOptions {
 		show_type:                 true,
 		show_owner:                true,
@@ -237,53 +560,29 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 		show_storage_rebate:       true,
 	};
 
-	fn parse_past_object_response(res: SuiPastObjectResponse) -> Option<(SuiObjectData, Vec<u8>)> {
-		use SuiPastObjectResponse::*;
-		match res {
-			VersionFound(obj) => {
-				let mut bytes = Vec::with_capacity(4096);
-				let bson = bson::to_bson(&obj).unwrap();
-				bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
-				return Some((obj, bytes))
-			}
-			ObjectDeleted(o) => {
-				// TODO this can't be right (at least the message needs fixing, but I suspect more than that)
-				warn!(object_id = ?o.object_id, version = ?o.version, "object not available: object has been deleted");
-			}
-			ObjectNotExists(object_id) => {
-				warn!(object_id = ?object_id, "object not available: object doesn't exist");
-			}
-			VersionNotFound(object_id, version) => {
-				warn!(object_id = ?object_id, version = ?version, "object not available: version not found");
-			}
-			VersionTooHigh { object_id, asked_version, latest_version } => {
-				warn!(object_id = ?object_id, asked_version = ?asked_version, latest_version = ?latest_version, "object not available: version too high");
-			}
-		};
-		None
-	}
-
 	stream! {
 		for await mut chunk in stream {
 			// skip loading objects for 'delete' type changes, as we're just going to delete them from our working set anyway
-			let deleted = chunk.drain_filter(|o| if let Change::Deleted {..} = o.change { true } else { false }).collect::<Vec<_>>();
-			let query_objs = chunk.iter().map(|o| o.get_past_object_request()).collect::<Vec<_>>();
-			match sui.try_multi_get_parsed_past_object(query_objs, query_opts.clone()).await {
+			for item in chunk.drain_filter(|o| o.deletion) {
+				yield (StepStatus::Ok, item);
+			}
+			let obj_ids = chunk.iter().map(|item| item.id).collect::<Vec<_>>();
+			match sui.multi_get_object_with_options(obj_ids, query_opts.clone()).await {
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
-					for mut snapshot in chunk {
-						match sui.try_get_parsed_past_object(snapshot.object_id, snapshot.version, query_opts.clone()).await {
+					for mut item in chunk {
+						match sui.get_object_with_options(item.id, query_opts.clone()).await {
 							Err(err) => {
-								// TODO add info about object to log
-								error!(error = format!("{err:?}"), "individual fetch also failed");
-								yield (StepStatus::Err, snapshot);
+								error!(object_id = ?item.id, error = format!("{err:?}"), "individual fetch also failed");
+								yield (StepStatus::Err, item);
 							},
 							Ok(res) => {
-								if let Some((_obj, bytes)) = parse_past_object_response(res) {
-									snapshot.object = Some(bytes);
-									yield (StepStatus::Ok, snapshot);
+								if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
+									item.version = version;
+									item.bytes = bytes;
+									yield (StepStatus::Ok, item);
 								}
 							}
 						}
@@ -294,67 +593,27 @@ pub async fn transform<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 					// the sui endpoint is implemented such that the response items are in the same
 					// order as the input items, so we don't have to search or otherwise match them
 					if objs.len() != chunk.len() {
-						panic!("sui.try_multi_get_parsed_past_object() mismatch between input and result len!");
+						panic!("sui.multi_get_object_with_options() mismatch between input and result len!");
 					}
-					for (mut snapshot, res) in zip(chunk, objs) {
+					for (mut item, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
-						if let Some((_obj, bytes)) = parse_past_object_response(res) {
-							snapshot.object = Some(bytes);
-							yield (StepStatus::Ok, snapshot);
+						if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
+							item.version = version;
+							item.bytes = bytes;
+							yield (StepStatus::Ok, item);
 						}
 					}
 				}
-			}
-			// (the following note applies if we're not equipped to handle out-of-order changes/deletes, but at least at this point we are)
-			// send in deleted items last, to ensure we don't re-insert any object that was just deleted
-			// just because they were processed as part of the same chunk of our stream here
-			// ideally we would execute these exactly in order, but that would require more implementation
-			// effort, and this simplification should retain logical correctness of effects
-			for item in deleted {
-				yield (StepStatus::Ok, item);
 			}
 		}
 	}
 }
 
-pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
+pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
 	stream: S,
 	db: &'a Database,
 	collection_name: &'a str,
-) -> impl Stream<Item = (StepStatus, ObjectSnapshot)> + 'a {
-	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE * 10, Duration::from_millis(1_000));
-
-	let stream = stream! {
-		for await mut chunk in stream {
-			// drop intermediate updates to the same objects:
-			// group updates by object id, retain only the update with the higest version
-			chunk.sort_unstable_by(|item1, item2| {
-				// compare by object_id first, then by version in reverse order, so that the
-				// item with the highest version comes first
-				match item1.object_id.cmp(&item2.object_id) {
-					Ordering::Equal => item2.version.cmp(&item1.version),
-					res => res
-				}
-			});
-			let chunk_len = chunk.len();
-			let mut skipped = 0;
-			let mut oid = ObjectID::ZERO;
-			for item in chunk.into_iter() {
-				if item.object_id != oid {
-					oid = item.object_id;
-					yield item;
-				} else {
-					skipped += 1;
-				}
-				// skip all with same oid after the first, as the highest version comes first,
-				// and it's the only one we're interested in
-			}
-			if skipped > 0 {
-				info!(">> skipped {} intermediate updates out of {} ({}%)", skipped, chunk_len, (skipped as f64 / chunk_len as f64 * 100.0).round() as u64);
-			}
-		}
-	};
-
+) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE, Duration::from_millis(1_000));
 
 	stream! {
@@ -367,50 +626,48 @@ pub async fn load<'a, S: Stream<Item = ObjectSnapshot> + 'a>(
 				// but what it does provide is the generic run_command() method,
 				let updates = chunk.iter().map(|item| {
 					let v = item.version.to_string();
+					let v_ = u64::from_str_radix(&v[2..], 16).unwrap();
 					// FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
-					let v_ = i64::from_str_radix(&v[2..], 16).unwrap();
-					match item.change {
-						Change::Deleted => {
-							// we're assuming each object id will ever exist only once, so when deleting
-							// we don't check for previous versions
-							// we execute the delete, whenever it may come in, and it's final
-							doc! {
-								"q": doc! { "_id": item.object_id.to_string() },
-								"u": doc! {
-									"$set": {
-										"_id": item.object_id.to_string(),
-										"version": v,
-										"version_": v_,
-										"deleted": true,
-									},
+					let v_ = v_ as i64;
+					if item.deletion {
+						// we're assuming each object id will ever exist only once, so when deleting
+						// we don't check for previous versions
+						// we execute the delete, whenever it may come in, and it's final
+						doc! {
+							"q": doc! { "_id": item.id.to_string() },
+							"u": doc! {
+								"$set": {
+									"_id": item.id.to_string(),
+									"version": v,
+									"version_": v_,
+									"deleted": true,
 								},
-								"upsert": true,
-								"multi": false,
-							}
+							},
+							"upsert": true,
+							"multi": false,
 						}
-						Change::Created | Change::Mutated => {
-							// we will only upsert and object if this current version is higher than any previously stored one
-							// (if the object has already been deleted, we still allow setting any other fields, including
-							// any previously valid full object state... probably not needed, but also not incorrect)
-							let mut c = Cursor::new(item.object.as_ref().unwrap());
-							doc! {
-								"q": doc! { "_id": item.object_id.to_string() },
-								// use an aggregation pipeline in our update, so that we can conditionally update
-								// the version and object only if the previous version was lower than our current one
-								"u": vec![doc! {
-									"$set": {
-										"_id": item.object_id.to_string(),
-										// version_ must be added first, so that it's available in the next items in the pipeline
-										// it has a more complex condition, so it's also added if the field doesn't exist yet
-										// afterwards, the other fields can rely on it being present
-										"version_": {"$cond": { "if": { "$or": [ { "$lt": [ "$version_", v_ ] }, { "$lte": [ "$version", None::<i32> ] } ] }, "then": v_, "else": "$version_" }},
-										"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
-										"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
-									},
-								}],
-								"upsert": true,
-								"multi": false,
-							}
+					} else {
+						// we will only upsert and object if this current version is higher than any previously stored one
+						// (if the object has already been deleted, we still allow setting any other fields, including
+						// any previously valid full object state... probably not needed, but also not incorrect)
+						let mut c = Cursor::new(&item.bytes);
+						doc! {
+							"q": doc! { "_id": item.id.to_string() },
+							// use an aggregation pipeline in our update, so that we can conditionally update
+							// the version and object only if the previous version was lower than our current one
+							"u": vec![doc! {
+								"$set": {
+									"_id": item.id.to_string(),
+									// version_ must be added first, so that it's available in the next items in the pipeline
+									// it has a more complex condition, so it's also added if the field doesn't exist yet
+									// afterwards, the other fields can rely on it being present
+									"version_": {"$cond": { "if": { "$or": [ { "$lt": [ "$version_", v_ ] }, { "$lte": [ "$version", None::<i32> ] } ] }, "then": v_, "else": "$version_" }},
+									"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
+									"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
+								},
+							}],
+							"upsert": true,
+							"multi": false,
 						}
 					}
 				}).collect::<Vec<_>>();
