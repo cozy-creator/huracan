@@ -9960,6 +9960,7 @@ name = "sui-indexer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-recursion",
  "async-stream",
  "bson",
@@ -9974,6 +9975,7 @@ dependencies = [
  "macros",
  "mongodb",
  "pulsar",
+ "rocksdb",
  "serde 1.0.160",
  "serde_json",
  "sui-sdk",
