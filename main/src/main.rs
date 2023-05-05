@@ -6,7 +6,6 @@
 extern crate serde;
 
 use async_stream::stream;
-use clap::Parser;
 use conf::AppConfig;
 use dotenv::dotenv;
 use mongodb::{
