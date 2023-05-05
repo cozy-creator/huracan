@@ -35,6 +35,7 @@ pub struct MongoConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PulsarConfig {
+	pub url:         String,
 	pub issuer:      String,
 	pub credentials: String,
 	pub audience:    String,
