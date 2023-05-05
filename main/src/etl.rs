@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use async_channel::Sender as ACSender;
 use async_stream::stream;
-use bson::{doc, Document};
+use bson::{doc, oid::ObjectId, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
 use futures_util::SinkExt;
@@ -42,6 +42,7 @@ use tokio::{pin, sync::mpsc::Sender as TSender};
 use crate::{
 	_prelude::*,
 	conf::{AppConfig, MongoConfig, RpcProviderConfig},
+	utils::make_descending_ranges,
 };
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -207,10 +208,23 @@ pub async fn fullscan(
 		client.database(&cfg.mongo.db)
 	};
 
-	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as usize;
+	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
 
 	let default_num_workers = sui.configs.len();
 	let num_step1_workers = cfg.workers.step1.unwrap_or(default_num_workers);
+
+	// fetch already completed checkpoints
+	let completed_checkpoint_ranges = {
+		#[derive(Serialize, Deserialize)]
+		struct Checkpoint {
+			// TODO mongo u64 issue
+			id: u64,
+		}
+		let coll = mongo.collection::<Checkpoint>(&mongo_collection_name(&cfg, "_checkpoints"));
+		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap().id).collect::<Vec<_>>().await;
+		make_descending_ranges(cpids)
+	};
+
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
 	let (object_ids_tx, object_ids_rx) = async_channel::bounded(cfg.queuebuffers.step1out);
 	// for the control channel, we want to add some blocking behavior in case the task acting
@@ -239,6 +253,7 @@ pub async fn fullscan(
 			tokio::spawn(fullscan_extract(
 				cfg.clone(),
 				checkpoint_max,
+				completed_checkpoint_ranges.clone(),
 				step_size,
 				partition,
 				sui.clone(),
@@ -369,7 +384,8 @@ async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequence
 
 async fn fullscan_extract(
 	cfg: AppConfig,
-	checkpoint_max: usize,
+	checkpoint_max: u64,
+	completed_checkpoint_ranges: Vec<(u64, u64)>,
 	step_size: usize,
 	partition: usize,
 	mut sui: ClientPool,
@@ -378,11 +394,35 @@ async fn fullscan_extract(
 	object_ids_tx: ACSender<ObjectItem>,
 	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
 ) {
+	let mut completed_iter = completed_checkpoint_ranges.iter();
+	let mut completed_range = completed_iter.next();
 	// walk partitioned checkpoints range from newest to oldest
-	for cp in (1..=checkpoint_max - partition).rev().step_by(step_size) {
+	'cp: for cp in (1..=checkpoint_max as usize - partition).rev().step_by(step_size) {
+		let cp = cp as u64;
 		// do we need to stop?
 		if stop.load(Relaxed) {
 			break
+		}
+		// check if we've already completed this checkpoint:
+		// ranges are sorted from highest to lowest, so we can iterate them in tandem with the
+		// checkpoint sequence itself
+		loop {
+			if let Some((end, start)) = completed_range {
+				if cp < *start {
+					// cp too low already, check next one
+					completed_range = completed_iter.next();
+				} else if cp < *end {
+					info!("skipping cp {}, already done!", cp);
+					// match! skip this cp and continue with next one!
+					continue 'cp
+				} else {
+					// this cp is still higher than our highest range end, so we wait and try again
+					// while cp is getting lower and lower, until we have a potential match
+					break
+				}
+			} else {
+				break
+			}
 		}
 		// start fetching all tx blocks for this checkpoint
 		let q = SuiTransactionBlockResponseQuery::new(
