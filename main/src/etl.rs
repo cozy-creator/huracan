@@ -220,6 +220,7 @@ pub async fn fullscan(
 		tokio::sync::mpsc::channel(num_step1_workers * cfg.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mut mongo_rx) = tokio::sync::mpsc::channel(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor);
+
 	// handle stopping gracefully
 	let stop = Arc::new(AtomicBool::new(false));
 	tokio::spawn({
@@ -329,6 +330,10 @@ async fn make_producer(cfg: &AppConfig, pulsar: &Pulsar<TokioExecutor>, ty: &str
 		.await?)
 }
 
+fn mongo_collection_name(cfg: &AppConfig, suffix: &str) -> String {
+	format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
+}
+
 async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequenceNumber) {
 	let mut retries_left = cfg.mongo.retries;
 	loop {
@@ -336,7 +341,7 @@ async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequence
 			.run_command(
 				doc! {
 					// e.g. prod_testnet_objects_checkpoints
-					"update": format!("{}_{}_{}_checkpoints", cfg.env, cfg.net, cfg.mongo.collectionbase),
+					"update": mongo_collection_name(&cfg, "_checkpoints"),
 					"updates": vec![
 						doc! {
 							// FIXME how do we store a u64 in mongo? this will be an issue when the chain
@@ -644,7 +649,7 @@ pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
 ) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	let stream = stream.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
 	// e.g. prod_testnet_objects
-	let collection = format!("{}_{}_{}", cfg.env, cfg.net, cfg.mongo.collectionbase);
+	let collection = mongo_collection_name(&cfg, "");
 
 	stream! {
 		for await chunk in stream {
