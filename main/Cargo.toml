@@ -8,7 +8,6 @@ anyhow = "1.0"
 futures = "0.3"
 figment = { version = "0.10", features = ["yaml", "env"] }
 clap = "4.2.1"
-humanize-rs = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-futures = "~0.2.5"

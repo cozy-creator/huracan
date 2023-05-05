@@ -18,7 +18,7 @@ use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Database,
 };
-use pulsar::{Pulsar, TokioExecutor};
+use pulsar::{Producer, Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::{
 	apis::ReadApi,
@@ -39,7 +39,10 @@ use sui_types::{
 };
 use tokio::{pin, sync::mpsc::Sender as TSender};
 
-use crate::{_prelude::*, conf::AppConfig};
+use crate::{
+	_prelude::*,
+	conf::{AppConfig, MongoConfig, RpcProviderConfig},
+};
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
@@ -95,12 +98,13 @@ impl ObjectSnapshot {
 
 #[derive(Clone)]
 pub struct ClientPool {
-	urls:    Vec<String>,
+	configs: Vec<RpcProviderConfig>,
 	clients: Vec<Client>,
 }
 
 pub struct Client {
 	id:      usize,
+	config:  RpcProviderConfig,
 	sui:     SuiClient,
 	backoff: Option<(Instant, u8)>,
 	reqs:    u64,
@@ -109,7 +113,7 @@ pub struct Client {
 impl Clone for Client {
 	// reset backoff and reqs
 	fn clone(&self) -> Self {
-		Self { id: self.id, sui: self.sui.clone(), backoff: None, reqs: 0 }
+		Self { id: self.id, config: self.config.clone(), sui: self.sui.clone(), backoff: None, reqs: 0 }
 	}
 }
 
@@ -120,10 +124,11 @@ impl Client {
 }
 
 impl ClientPool {
-	pub async fn new(urls: Vec<String>) -> Result<Self> {
-		let mut clients = Vec::with_capacity(urls.len());
-		clients.push(Self::make_client(0, &urls[0]).await?);
-		Ok(Self { urls, clients })
+	pub async fn new(configs: Vec<RpcProviderConfig>) -> Result<Self> {
+		let mut clients = Vec::with_capacity(configs.len());
+		let mut self_ = Self { configs, clients };
+		self_.clients.push(self_.make_client(0).await?);
+		Ok(self_)
 	}
 
 	#[with_client_rotation]
@@ -179,41 +184,43 @@ impl ClientPool {
 		try_multi_get_parsed_past_object(past_objects.clone(), options.clone()).await
 	}
 
-	async fn make_client(id: usize, url: &str) -> Result<Client> {
-		let sui = SuiClientBuilder::default().build(url).await?;
-		Ok(Client { id, sui, backoff: None, reqs: 0 })
+	async fn make_client(&self, id: usize) -> Result<Client> {
+		let config = self.configs[id].clone();
+		let sui = SuiClientBuilder::default().build(&config.url).await?;
+		Ok(Client { id, config, sui, backoff: None, reqs: 0 })
 	}
 }
 
 pub async fn fullscan(
 	cfg: &AppConfig,
-	collection: String,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
 	rx_term: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
-	let db = Arc::new(DBWithThreadMode::<SingleThreaded>::open_default("fullscan.tmp.db").unwrap());
+	let db = Arc::new(DBWithThreadMode::<SingleThreaded>::open_default(&cfg.rocksdbfile).unwrap());
 
 	let mongo = {
 		let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
 		// use zstd compression for messages
-		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(1) }]);
+		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(cfg.mongo.zstdlevel) }]);
 		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
 		let client = mongodb::Client::with_options(client_options)?;
-		client.database(&cfg.mongo.database)
+		client.database(&cfg.mongo.db)
 	};
 
 	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as usize;
-	let num_workers = sui.urls.len();
-	let step_size = num_workers;
+
+	let default_num_workers = sui.configs.len();
+	let num_step1_workers = cfg.workers.step1.unwrap_or(default_num_workers);
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
-	let (object_ids_tx, object_ids_rx) = async_channel::bounded(1024 * 1024);
+	let (object_ids_tx, object_ids_rx) = async_channel::bounded(cfg.queuebuffers.step1out);
 	// for the control channel, we want to add some blocking behavior in case the task acting
 	// on the control messages falls too far behind -- we don't want to process major portions of the
 	// chain without also storing info about our progress so we can resume about where we left off
-	let (cp_control_tx, mut cp_control_rx) = tokio::sync::mpsc::channel(step_size * 2);
+	let (cp_control_tx, mut cp_control_rx) =
+		tokio::sync::mpsc::channel(num_step1_workers * cfg.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
-	let (mongo_tx, mut mongo_rx) = tokio::sync::mpsc::channel(MONGODB_BATCH_SIZE * 4);
+	let (mongo_tx, mut mongo_rx) = tokio::sync::mpsc::channel(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor);
 	// handle stopping gracefully
 	let stop = Arc::new(AtomicBool::new(false));
 	tokio::spawn({
@@ -226,60 +233,63 @@ pub async fn fullscan(
 
 	// spawn as many step 1 workers as we have RPC server urls,
 	// let each worker freely balance requests between them
-	for partition in 0..num_workers {
-		tokio::spawn(fullscan_extract(
-			checkpoint_max,
-			step_size,
-			partition,
-			sui.clone(),
-			db.clone(),
-			stop.clone(),
-			object_ids_tx.clone(),
-			cp_control_tx.clone(),
-		));
+	{
+		let step_size = num_step1_workers;
+		for partition in 0..num_step1_workers {
+			tokio::spawn(fullscan_extract(
+				cfg.clone(),
+				checkpoint_max,
+				step_size,
+				partition,
+				sui.clone(),
+				db.clone(),
+				stop.clone(),
+				object_ids_tx.clone(),
+				cp_control_tx.clone(),
+			));
+		}
 	}
 
 	// step 2 workers
-	for _ in 0..num_workers {
-		tokio::spawn({
-			let sui = sui.clone();
-			let mut retries = pulsar
-				.producer()
-				.with_topic(&format!("persistent://public/default/{}_retries", collection))
-				.build()
-				.await?;
-			let object_ids_rx = object_ids_rx.clone();
-			let mongo_tx = mongo_tx.clone();
+	{
+		let num_workers = cfg.workers.step2.unwrap_or(default_num_workers);
+		for _ in 0..num_workers {
+			tokio::spawn({
+				let sui = sui.clone();
+				let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
+				let object_ids_rx = object_ids_rx.clone();
+				let mongo_tx = mongo_tx.clone();
 
-			async move {
-				let stream = transform(object_ids_rx, sui).await;
-				let stream = stream! {
-					for await (status, item) in stream {
-						if let StepStatus::Err = status {
-							retries.send(item).await.expect("failed to send retry message to pulsar!");
-						} else {
-							yield item;
+				async move {
+					let stream = transform(object_ids_rx, sui).await;
+					let stream = stream! {
+						for await (status, item) in stream {
+							if let StepStatus::Err = status {
+								retries.send(item).await.expect("failed to send retry message to pulsar!");
+							} else {
+								yield item;
+							}
 						}
+					};
+					// convert stream to tokio channel
+					pin!(stream);
+					while let Some(it) = stream.next().await {
+						mongo_tx.send(it).await.expect("passing items from step 2 stream to mongo tokio channel");
 					}
-				};
-				pin!(stream);
-				while let Some(it) = stream.next().await {
-					mongo_tx.send(it).await.expect("passing items from step 2 stream to mongo tokio channel");
 				}
-			}
-		});
+			});
+		}
 	}
 
 	// step 3: a single worker should be fine as we can run large, efficient batches
-	let mut retries =
-		pulsar.producer().with_topic(&format!("persistent://public/default/{}_retries", collection)).build().await?;
+	let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
 	// transform tokio receiver to stream
 	let stream = stream! {
 		while let Some(it) = mongo_rx.recv().await {
 			yield it;
 		}
 	};
-	let stream = load(stream, &mongo, &collection).await;
+	let stream = load(&cfg, stream, &mongo).await;
 	let mut completions_left = HashMap::new();
 	pin!(stream);
 	loop {
@@ -291,14 +301,14 @@ pub async fn fullscan(
 				}
 				let v = completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64);
 				if *v == 0 {
-					mongo_checkpoint(&mongo, &collection, cp).await;
+					mongo_checkpoint(&cfg.mongo, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
 			Some((cp, num_items)) = cp_control_rx.recv() => {
 				let v = completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64);
 				if *v == 0 {
-					mongo_checkpoint(&mongo, &collection, cp).await;
+					mongo_checkpoint(&cfg.mongo, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
@@ -310,13 +320,23 @@ pub async fn fullscan(
 	Ok(())
 }
 
-async fn mongo_checkpoint(db: &Database, collection: &str, cp: CheckpointSequenceNumber) {
-	let mut retries_left = 2;
+async fn make_producer(cfg: &AppConfig, pulsar: &Pulsar<TokioExecutor>, ty: &str) -> Result<Producer<TokioExecutor>> {
+	Ok(pulsar
+		.producer()
+		// e.g. {persistent://public/default/}{prod}_{testnet}_{objects}_{retries}
+		// braces added for clarity of discerning between the different parts
+		.with_topic(&format!("{}{}_{}_{}_{}", cfg.pulsar.topicbase, cfg.env, cfg.net, cfg.mongo.collectionbase, ty))
+		.build()
+		.await?)
+}
+
+async fn mongo_checkpoint(cfg: &MongoConfig, db: &Database, cp: CheckpointSequenceNumber) {
+	let mut retries_left = cfg.retries;
 	loop {
 		if let Err(err) = db
 			.run_command(
 				doc! {
-					"update": format!("{}_checkpoints", collection),
+					"update": format!("{}_checkpoints", cfg.collectionbase),
 					"updates": vec![
 						doc! {
 							// FIXME how do we store a u64 in mongo? this will be an issue when the chain
@@ -336,13 +356,14 @@ async fn mongo_checkpoint(db: &Database, collection: &str, cp: CheckpointSequenc
 				retries_left -= 1;
 				continue
 			}
-			panic!("could not save checkpoint status for checkpoint {} to mongo, aborting!", cp);
+			error!(error = ?err, "checkpoint {} fully completed, but could not save checkpoint status to mongo!", cp);
 		}
 		break
 	}
 }
 
 async fn fullscan_extract(
+	cfg: AppConfig,
 	checkpoint_max: usize,
 	step_size: usize,
 	partition: usize,
@@ -364,14 +385,14 @@ async fn fullscan_extract(
 			Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 		);
 		let mut cursor = None;
-		let mut retry_count = 0;
+		let mut retries_left = cfg.sui.step1retries;
 		let mut num_objects = 0u32;
 
 		loop {
 			let page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
 			match page {
 				Ok(page) => {
-					retry_count = 0;
+					retries_left = cfg.sui.step1retries;
 					for tx_block in page.data {
 						if let Some(changes) = tx_block.object_changes {
 							for change in changes {
@@ -417,9 +438,12 @@ async fn fullscan_extract(
 					}
 				}
 				Err(err) => {
-					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retry_count);
-					retry_count += 1;
-					tokio::time::sleep(Duration::from_millis(500)).await;
+					if retries_left == 0 {
+						warn!(error = ?err, "Exhausted all retries fetching step 1 data, leaving checkpoint {} unfinished for this run", cp);
+					}
+					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
+					retries_left -= 1;
+					tokio::time::sleep(Duration::from_millis(cfg.sui.step1retrytimeoutms)).await;
 				}
 			}
 		}
@@ -610,15 +634,15 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 }
 
 pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
+	cfg: &'a AppConfig,
 	stream: S,
 	db: &'a Database,
-	collection_name: &'a str,
 ) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
-	let stream = stream.chunks_timeout(MONGODB_BATCH_SIZE, Duration::from_millis(1_000));
+	let stream = stream.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
 
 	stream! {
 		for await chunk in stream {
-			let mut retries_left = 2;
+			let mut retries_left = cfg.mongo.retries;
 			loop {
 				// for now mongo's rust driver doesn't offer a way to directly do bulk updates / batching
 				// there's a high-level API only for inserting many, but not for updating or deleting many,
@@ -673,7 +697,7 @@ pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
 				}).collect::<Vec<_>>();
 				let n = updates.len();
 				let res = db.run_command(doc! {
-					"update": collection_name,
+					"update": &cfg.mongo.collectionbase,
 					"updates": updates,
 				}, None).await;
 				match res {
