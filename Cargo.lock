@@ -9958,7 +9958,6 @@ dependencies = [
  "async-recursion",
  "async-stream",
  "bson",
- "clap 4.2.5",
  "dotenv",
  "figment",
  "futures",
