@@ -13,6 +13,10 @@ use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Client,
 };
+use pulsar::{
+	authentication::oauth2::{OAuth2Authentication, OAuth2Params},
+	Pulsar, TokioExecutor,
+};
 use sui_types::digests::TransactionDigest;
 use tokio::pin;
 use tracing_subscriber::filter::EnvFilter;
@@ -37,16 +41,26 @@ async fn main() -> anyhow::Result<()> {
 	let rx_term = setup_ctrl_c_listener();
 	let sui = {
 		let providers = if cfg.net == "testnet" {
-			cfg.sui.testnet
+			&cfg.sui.testnet
 		} else if cfg.net == "mainnet" {
-			cfg.sui.mainnet
+			&cfg.sui.mainnet
 		} else {
 			panic!("unknown net configuration: {} (expected: mainnet | testnet)", cfg.net);
 		};
 		ClientPool::new(providers.clone()).await?
 	};
 
-	fullscan(&cfg).await.unwrap();
+	let pulsar = Pulsar::builder(&cfg.pulsar.url, TokioExecutor)
+		.with_auth_provider(OAuth2Authentication::client_credentials(OAuth2Params {
+			issuer_url:      cfg.pulsar.issuer.clone(),
+			credentials_url: cfg.pulsar.credentials.clone(),
+			audience:        Some(cfg.pulsar.audience.clone()),
+			scope:           None,
+		}))
+		.build()
+		.await?;
+
+	fullscan(&cfg, sui, pulsar, rx_term).await.unwrap();
 
 	// let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
 	// let items = etl::extract(sui.clone(), rx_term, start_from, {

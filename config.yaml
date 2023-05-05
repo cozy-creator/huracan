@@ -22,6 +22,7 @@ mongo:
   zstdlevel: 1
 
 pulsar:
+  url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
   issuer: https://auth.streamnative.cloud/
   # o-mvqin-testnet.json, base64-encoded
   credentials: data:;base64,eyJ0eXBlIjoic25fc2VydmljZV9hY2NvdW50IiwiY2xpZW50X2lkIjoiUzNPUlZNc1VabDBaRUU3TnJjM3FJNzFNd1JlYm94bGEiLCJjbGllbnRfc2VjcmV0IjoiSkRDdjRyOUQzTWVwTzc5empuWVRBcWwwNkpYb3F1R3l5OVNUVDZna21xdTZOZG13ZUtESzVZVTNQTkFtNU5IdyIsImNsaWVudF9lbWFpbCI6InRlc3RuZXRAby1tdnFpbi5hdXRoLnN0cmVhbW5hdGl2ZS5jbG91ZCIsImlzc3Vlcl91cmwiOiJodHRwczovL2F1dGguc3RyZWFtbmF0aXZlLmNsb3VkLyJ9
