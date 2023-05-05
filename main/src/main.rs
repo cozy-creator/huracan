@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 	let pulsar = Pulsar::builder(&cfg.pulsar.url, TokioExecutor)
 		.with_auth_provider(OAuth2Authentication::client_credentials(OAuth2Params {
 			issuer_url:      cfg.pulsar.issuer.clone(),
-			credentials_url: cfg.pulsar.credentials.clone(),
+			credentials_url: format!("data:;base64,{}", cfg.pulsar.credentials),
 			audience:        Some(cfg.pulsar.audience.clone()),
 			scope:           None,
 		}))

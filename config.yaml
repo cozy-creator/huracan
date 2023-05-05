@@ -13,7 +13,8 @@ workers:
   step2:
 
 mongo:
-  uri: mongodb+srv://sui-devnet.gpf3cd1.mongodb.net
+  # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
+  #uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net
   db: sui
   collectionbase: objects
   batchsize: 512
@@ -25,21 +26,25 @@ pulsar:
   url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
   issuer: https://auth.streamnative.cloud/
   # o-mvqin-testnet.json, base64-encoded
-  credentials: data:;base64,eyJ0eXBlIjoic25fc2VydmljZV9hY2NvdW50IiwiY2xpZW50X2lkIjoiUzNPUlZNc1VabDBaRUU3TnJjM3FJNzFNd1JlYm94bGEiLCJjbGllbnRfc2VjcmV0IjoiSkRDdjRyOUQzTWVwTzc5empuWVRBcWwwNkpYb3F1R3l5OVNUVDZna21xdTZOZG13ZUtESzVZVTNQTkFtNU5IdyIsImNsaWVudF9lbWFpbCI6InRlc3RuZXRAby1tdnFpbi5hdXRoLnN0cmVhbW5hdGl2ZS5jbG91ZCIsImlzc3Vlcl91cmwiOiJodHRwczovL2F1dGguc3RyZWFtbmF0aXZlLmNsb3VkLyJ9
+  # you probably want to override this via ENV
+  # TODO discuss whether we should not include the testnet credentials here
+  credentials: eyJ0eXBlIjoic25fc2VydmljZV9hY2NvdW50IiwiY2xpZW50X2lkIjoiUzNPUlZNc1VabDBaRUU3TnJjM3FJNzFNd1JlYm94bGEiLCJjbGllbnRfc2VjcmV0IjoiSkRDdjRyOUQzTWVwTzc5empuWVRBcWwwNkpYb3F1R3l5OVNUVDZna21xdTZOZG13ZUtESzVZVTNQTkFtNU5IdyIsImNsaWVudF9lbWFpbCI6InRlc3RuZXRAby1tdnFpbi5hdXRoLnN0cmVhbW5hdGl2ZS5jbG91ZCIsImlzc3Vlcl91cmwiOiJodHRwczovL2F1dGguc3RyZWFtbmF0aXZlLmNsb3VkLyJ9
   audience: urn:sn:pulsar:o-mvqin:nonprod
   topicbase: persistent://public/default/
 
 sui:
   testnet:
-    - url: https://rpc-testnet.suiscan.xyz
+    - url: https://rpc-testnet.suiscan.xyz:443
       name: suiscan
       objectsquerylimit: 50
-    - url: https://sui-testnet.nodeinfra.com
+    - url: https://sui-testnet.nodeinfra.com:443
       name: nodeinfra
       objectsquerylimit: 50
   mainnet:
-#    - url: ""
-#      name: ""
+    # TODO add mainnet servers
+    - url: ""
+      name: ""
+      objectsquerylimit: 50
   step1retries: 3
   step1retrytimeoutms: 500
 
