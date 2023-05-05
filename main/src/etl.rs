@@ -218,10 +218,10 @@ pub async fn fullscan(
 		#[derive(Serialize, Deserialize)]
 		struct Checkpoint {
 			// TODO mongo u64 issue
-			id: u64,
+			_id: u64,
 		}
 		let coll = mongo.collection::<Checkpoint>(&mongo_collection_name(&cfg, "_checkpoints"));
-		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap().id).collect::<Vec<_>>().await;
+		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap()._id).collect::<Vec<_>>().await;
 		make_descending_ranges(cpids)
 	};
 
@@ -412,7 +412,6 @@ async fn fullscan_extract(
 					// cp too low already, check next one
 					completed_range = completed_iter.next();
 				} else if cp < *end {
-					info!("skipping cp {}, already done!", cp);
 					// match! skip this cp and continue with next one!
 					continue 'cp
 				} else {
