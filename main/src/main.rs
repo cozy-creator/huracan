@@ -28,6 +28,7 @@ use crate::{
 mod _prelude;
 mod conf;
 mod etl;
+mod utils;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
