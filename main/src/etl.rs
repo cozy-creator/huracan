@@ -427,9 +427,13 @@ async fn fullscan_extract(
 							}
 						}
 					}
-					if page.next_cursor.is_none() {
+					if !page.has_next_page {
 						// we're done with this cp
 						// send control message about number of expected object tasks from this cp
+						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						break
+					} else if page.next_cursor.is_none() {
+						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
 						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else {
