@@ -74,7 +74,7 @@ pub fn with_client_rotation(_attr: proc_macro::TokenStream, item: proc_macro::To
 			{
 				let f = client.backoff.map(|b| b.1).unwrap_or(0);
 				let backoff_millis = (2u64.pow(f as u32) * 250).min(10_000);
-				info!("hit rate limit at {}; backing off for {}ms (factor {})", self.urls[client.id], backoff_millis, f);
+				info!("hit rate limit at {}; backing off for {}ms (factor {})", self.configs[client.id].name, backoff_millis, f);
 				client.backoff = Some((Instant::now() + Duration::from_millis(backoff_millis), f + 1));
 			}
 
@@ -84,18 +84,18 @@ pub fn with_client_rotation(_attr: proc_macro::TokenStream, item: proc_macro::To
 			// all clients in backoff?
 			if let Some((wait_until, _)) = self.clients[0].backoff {
 				// any more clients we can create?
-				let spawned_new_client = if self.urls.len() > self.clients.len() {
+				let spawned_new_client = if self.configs.len() > self.clients.len() {
 					// new client from next url, set as first to use
 					let ix = self.clients.len();
-					match Self::make_client(ix, &self.urls[ix]).await {
+					match self.make_client(ix).await {
 						Ok(client) => {
 							self.clients.insert(0, client);
 							true
 						}
 						Err(err) => {
 							warn!(
-								"failed to create additional sui client for url #{}: {} -- {} -- will try again later!",
-								ix, self.urls[ix], err
+								"failed to create additional sui client '{}': {} -- {} -- will try again later!",
+								ix, self.configs[ix].name, err
 							);
 							false
 						}

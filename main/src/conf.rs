@@ -7,22 +7,38 @@ use crate::_prelude::*;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MongoObjectsConfig {
-	pub collection: String,
+pub struct QueueBuffersConfig {
+	pub step1out:        usize,
+	pub cpcontrolfactor: usize,
+	pub mongoinfactor:   usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkersConfig {
+	pub step1: Option<usize>,
+	pub step2: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MongoConfig {
-	pub uri:      String,
-	pub database: String,
-	pub objects:  MongoObjectsConfig,
+	pub uri:                String,
+	pub db:                 String,
+	pub collectionbase:     String,
+	pub batchsize:          usize,
+	pub batchwaittimeoutms: u64,
+	pub retries:            usize,
+	pub zstdlevel:          i32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExtractConfig {
-	pub from: Option<String>,
+pub struct PulsarConfig {
+	pub issuer:      String,
+	pub credentials: String,
+	pub audience:    String,
+	pub topicbase:   String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -35,15 +51,42 @@ pub struct LogConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SuiApiConfig {
-	pub urls: Vec<String>,
+pub struct RpcProviderConfig {
+	pub url:               String,
+	pub name:              String,
+	pub objectsquerylimit: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiConfig {
-	pub api: SuiApiConfig,
+	pub testnet:             Vec<RpcProviderConfig>,
+	pub mainnet:             Vec<RpcProviderConfig>,
+	pub step1retries:        usize,
+	pub step1retrytimeoutms: u64,
 }
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppConfig {
+	pub env:          String,
+	pub net:          String,
+	pub rocksdbfile:  String,
+	pub queuebuffers: QueueBuffersConfig,
+	pub workers:      WorkersConfig,
+	pub mongo:        MongoConfig,
+	pub pulsar:       PulsarConfig,
+	pub sui:          SuiConfig,
+	pub log:          LogConfig,
+}
+
+impl AppConfig {
+	pub fn new() -> anyhow::Result<Self> {
+		Ok(Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?)
+	}
+}
+
+// -- helpers
 
 #[derive(Clone, Debug)]
 pub struct CLevel(pub Level);
@@ -60,43 +103,5 @@ impl<'de> Deserialize<'de> for CLevel {
 	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<CLevel, D::Error> {
 		let s: String = Deserialize::deserialize(deserializer)?;
 		Level::from_str(&s).map(CLevel).map_err(de::Error::custom)
-	}
-}
-
-#[derive(Clone, Debug)]
-pub struct CDuration(Duration);
-
-impl Deref for CDuration {
-	type Target = Duration;
-
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-
-impl<'de> Deserialize<'de> for CDuration {
-	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<CDuration, D::Error> {
-		let s: String = Deserialize::deserialize(deserializer)?;
-		let s = s.replace('_', "");
-		let v = humanize_rs::duration::parse(&s);
-		let r = v.map_err(de::Error::custom)?;
-		Ok(CDuration(r))
-	}
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AppConfig {
-	pub extract: ExtractConfig,
-	pub log:     LogConfig,
-	pub mongo:   MongoConfig,
-	pub sui:     SuiConfig,
-}
-
-impl AppConfig {
-	pub fn new(path: String) -> anyhow::Result<Self> {
-		let cfg = Figment::new().merge(Yaml::file(path)).merge(Env::prefixed("APP_").split("_")).extract()?;
-
-		Ok(cfg)
 	}
 }

@@ -1,6 +1,46 @@
-extract: { }
-# instead of using --start-from CLI arg you can also use this:
-#    from: <tx digest>
+env: dev
+net: testnet
+rocksdbfile: ./fullscan.tmp.db
+
+queuebuffers:
+  # 1024 * 1024
+  step1out: 1048576
+  cpcontrolfactor: 2
+  mongoinfactor: 4
+
+workers:
+  step1:
+  step2:
+
+mongo:
+  uri: mongodb+srv://sui-devnet.gpf3cd1.mongodb.net
+  db: sui
+  collectionbase: objects
+  batchsize: 512
+  batchwaittimeoutms: 1000
+  retries: 2
+  zstdlevel: 1
+
+pulsar:
+  issuer: https://auth.streamnative.cloud/
+  # o-mvqin-testnet.json, base64-encoded
+  credentials: data:;base64,eyJ0eXBlIjoic25fc2VydmljZV9hY2NvdW50IiwiY2xpZW50X2lkIjoiUzNPUlZNc1VabDBaRUU3TnJjM3FJNzFNd1JlYm94bGEiLCJjbGllbnRfc2VjcmV0IjoiSkRDdjRyOUQzTWVwTzc5empuWVRBcWwwNkpYb3F1R3l5OVNUVDZna21xdTZOZG13ZUtESzVZVTNQTkFtNU5IdyIsImNsaWVudF9lbWFpbCI6InRlc3RuZXRAby1tdnFpbi5hdXRoLnN0cmVhbW5hdGl2ZS5jbG91ZCIsImlzc3Vlcl91cmwiOiJodHRwczovL2F1dGguc3RyZWFtbmF0aXZlLmNsb3VkLyJ9
+  audience: urn:sn:pulsar:o-mvqin:nonprod
+  topicbase: persistent://public/default/
+
+sui:
+  testnet:
+    - url: https://rpc-testnet.suiscan.xyz
+      name: suiscan
+      objectsquerylimit: 50
+    - url: https://sui-testnet.nodeinfra.com
+      name: nodeinfra
+      objectsquerylimit: 50
+  mainnet:
+#    - url: ""
+#      name: ""
+  step1retries: 3
+  step1retrytimeoutms: 500
 
 log:
   # fancy some colors? - disable if redirect to file is intended
@@ -10,15 +50,3 @@ log:
   # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
   # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
   #filter:
-
-mongo:
-  uri: "mongodb+srv://sui-devnet.gpf3cd1.mongodb.net/"
-  database: "sui"
-  objects:
-    collection: "objects2"
-
-sui:
-  api:
-    urls:
-      - "https://sui-testnet.nodeinfra.com:443/"
-      - "https://rpc-testnet.suiscan.xyz:443"
