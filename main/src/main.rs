@@ -47,6 +47,9 @@ async fn main() -> anyhow::Result<()> {
 		} else {
 			panic!("unknown net configuration: {} (expected: mainnet | testnet)", cfg.net);
 		};
+		if providers.is_empty() {
+			panic!("no RPC providers configured for {}!", cfg.net);
+		}
 		ClientPool::new(providers.clone()).await?
 	};
 
