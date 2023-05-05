@@ -639,6 +639,8 @@ pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
 	db: &'a Database,
 ) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	let stream = stream.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
+	// e.g. prod_testnet_objects
+	let collection = format!("{}_{}_{}", cfg.env, cfg.net, cfg.mongo.collectionbase);
 
 	stream! {
 		for await chunk in stream {
@@ -697,7 +699,7 @@ pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
 				}).collect::<Vec<_>>();
 				let n = updates.len();
 				let res = db.run_command(doc! {
-					"update": &cfg.mongo.collectionbase,
+					"update": &collection,
 					"updates": updates,
 				}, None).await;
 				match res {
