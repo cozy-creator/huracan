@@ -300,14 +300,14 @@ pub async fn fullscan(
 				}
 				let v = completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64);
 				if *v == 0 {
-					mongo_checkpoint(&cfg.mongo, &mongo, cp).await;
+					mongo_checkpoint(&cfg, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
 			Some((cp, num_items)) = cp_control_rx.recv() => {
 				let v = completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64);
 				if *v == 0 {
-					mongo_checkpoint(&cfg.mongo, &mongo, cp).await;
+					mongo_checkpoint(&cfg, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
@@ -329,13 +329,14 @@ async fn make_producer(cfg: &AppConfig, pulsar: &Pulsar<TokioExecutor>, ty: &str
 		.await?)
 }
 
-async fn mongo_checkpoint(cfg: &MongoConfig, db: &Database, cp: CheckpointSequenceNumber) {
-	let mut retries_left = cfg.retries;
+async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequenceNumber) {
+	let mut retries_left = cfg.mongo.retries;
 	loop {
 		if let Err(err) = db
 			.run_command(
 				doc! {
-					"update": format!("{}_checkpoints", cfg.collectionbase),
+					// e.g. prod_testnet_objects_checkpoints
+					"update": format!("{}_{}_{}_checkpoints", cfg.env, cfg.net, cfg.mongo.collectionbase),
 					"updates": vec![
 						doc! {
 							// FIXME how do we store a u64 in mongo? this will be an issue when the chain
