@@ -212,6 +212,9 @@ pub async fn fullscan(
 
 	let default_num_workers = sui.configs.len();
 	let num_step1_workers = cfg.workers.step1.unwrap_or(default_num_workers);
+	let num_step2_workers = cfg.workers.step2.unwrap_or(default_num_workers);
+	let num_mongo_workers = cfg.workers.mongo.unwrap_or(num_step1_workers);
+	info!("workers: step1: {}; step2: {}; mongo: {}", num_step1_workers, num_step2_workers, num_mongo_workers);
 
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
@@ -233,7 +236,9 @@ pub async fn fullscan(
 	let (cp_control_tx, mut cp_control_rx) =
 		tokio::sync::mpsc::channel(num_step1_workers * cfg.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
-	let (mongo_tx, mut mongo_rx) = tokio::sync::mpsc::channel(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor);
+	let (mongo_tx, mut mongo_rx) =
+		async_channel::bounded(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor * num_mongo_workers);
+	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(cfg.queuebuffers.last);
 
 	// handle stopping gracefully
 	let stop = Arc::new(AtomicBool::new(false));
@@ -269,8 +274,7 @@ pub async fn fullscan(
 
 	// step 2 workers
 	{
-		let num_workers = cfg.workers.step2.unwrap_or(default_num_workers);
-		for _ in 0..num_workers {
+		for _ in 0..num_step2_workers {
 			tokio::spawn({
 				let sui = sui.clone();
 				let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
@@ -288,7 +292,7 @@ pub async fn fullscan(
 							}
 						}
 					};
-					// convert stream to tokio channel
+					// convert stream to channel
 					pin!(stream);
 					while let Some(it) = stream.next().await {
 						mongo_tx.send(it).await.expect("passing items from step 2 stream to mongo tokio channel");
@@ -300,20 +304,21 @@ pub async fn fullscan(
 		drop(mongo_tx);
 	}
 
-	// step 3: a single worker should be fine as we can run large, efficient batches
-	let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
-	// transform tokio receiver to stream
-	let stream = stream! {
-		while let Some(it) = mongo_rx.recv().await {
-			yield it;
+	// step 3: mongo workers
+	{
+		for _ in 0..num_mongo_workers {
+			tokio::spawn(load(cfg.clone(), mongo_rx.clone(), mongo.clone(), last_tx.clone()));
 		}
-	};
-	let stream = load(&cfg, stream, &mongo).await;
+		drop(mongo_rx);
+		drop(last_tx);
+	}
+
+	// finally: check completions, issue retries
+	let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
 	let mut completions_left = HashMap::new();
-	pin!(stream);
 	loop {
 		tokio::select! {
-			Some((status, item)) = stream.next() => {
+			Some((status, item)) = last_rx.recv() => {
 				let cp = item.cp;
 				if let StepStatus::Err = status {
 					retries.send(item).await.expect("failed to send retry message to pulsar!");
@@ -566,6 +571,7 @@ pub async fn extract<'a, P: FnMut(Option<TransactionDigest>, TransactionDigest) 
 	})
 }
 
+#[derive(Debug)]
 pub enum StepStatus {
 	Ok,
 	Err,
@@ -686,106 +692,107 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 }
 
 pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
-	cfg: &'a AppConfig,
+	cfg: AppConfig,
 	stream: S,
-	db: &'a Database,
-) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
+	db: Database,
+	last_tx: TSender<(StepStatus, ObjectItem)>,
+) {
 	let stream = stream.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
 	// e.g. prod_testnet_objects
 	let collection = mongo_collection_name(&cfg, "");
 
-	stream! {
-		for await chunk in stream {
-			let mut retries_left = cfg.mongo.retries;
-			loop {
-				// for now mongo's rust driver doesn't offer a way to directly do bulk updates / batching
-				// there's a high-level API only for inserting many, but not for updating or deleting many,
-				// and neither for mixing all of those easily
-				// but what it does provide is the generic run_command() method,
-				let updates = chunk.iter().map(|item| {
-					let v = item.version.to_string();
-					let v_ = u64::from_str_radix(&v[2..], 16).unwrap();
-					// FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
-					let v_ = v_ as i64;
-					if item.deletion {
-						// we're assuming each object id will ever exist only once, so when deleting
-						// we don't check for previous versions
-						// we execute the delete, whenever it may come in, and it's final
-						doc! {
-							"q": doc! { "_id": item.id.to_string() },
-							"u": doc! {
-								"$set": {
-									"_id": item.id.to_string(),
-									"version": v,
-									"version_": v_,
-									"deleted": true,
-								},
+	pin!(stream);
+	while let Some(chunk) = stream.next().await {
+		let mut retries_left = cfg.mongo.retries;
+		loop {
+			// for now mongo's rust driver doesn't offer a way to directly do bulk updates / batching
+			// there's a high-level API only for inserting many, but not for updating or deleting many,
+			// and neither for mixing all of those easily
+			// but what it does provide is the generic run_command() method,
+			let updates = chunk.iter().map(|item| {
+				let v = item.version.to_string();
+				let v_ = u64::from_str_radix(&v[2..], 16).unwrap();
+				// FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
+				let v_ = v_ as i64;
+				if item.deletion {
+					// we're assuming each object id will ever exist only once, so when deleting
+					// we don't check for previous versions
+					// we execute the delete, whenever it may come in, and it's final
+					doc! {
+						"q": doc! { "_id": item.id.to_string() },
+						"u": doc! {
+							"$set": {
+								"_id": item.id.to_string(),
+								"version": v,
+								"version_": v_,
+								"deleted": true,
 							},
-							"upsert": true,
-							"multi": false,
-						}
-					} else {
-						// we will only upsert and object if this current version is higher than any previously stored one
-						// (if the object has already been deleted, we still allow setting any other fields, including
-						// any previously valid full object state... probably not needed, but also not incorrect)
-						let mut c = Cursor::new(&item.bytes);
-						doc! {
-							"q": doc! { "_id": item.id.to_string() },
-							// use an aggregation pipeline in our update, so that we can conditionally update
-							// the version and object only if the previous version was lower than our current one
-							"u": vec![doc! {
-								"$set": {
-									"_id": item.id.to_string(),
-									// version_ must be added first, so that it's available in the next items in the pipeline
-									// it has a more complex condition, so it's also added if the field doesn't exist yet
-									// afterwards, the other fields can rely on it being present
-									"version_": {"$cond": { "if": { "$or": [ { "$lt": [ "$version_", v_ ] }, { "$lte": [ "$version", None::<i32> ] } ] }, "then": v_, "else": "$version_" }},
-									"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
-									"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
-								},
-							}],
-							"upsert": true,
-							"multi": false,
-						}
+						},
+						"upsert": true,
+						"multi": false,
 					}
-				}).collect::<Vec<_>>();
-				let n = updates.len();
-				let res = db.run_command(doc! {
-					"update": &collection,
-					"updates": updates,
-				}, None).await;
-				match res {
-					Ok(res) => {
-						// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
-						if res.get_i32("n").unwrap() != n as i32 {
-							panic!("failed to execute at least one of the upserts: {:#?}", res.get_array("writeErrors").unwrap());
-						}
-						let inserted = if let Ok(upserted) = res.get_array("upserted") {
-							upserted.len()
-						} else {
-							0
-						};
-						let modified = res.get_i32("nModified").unwrap();
-						let missing = n - (inserted + modified as usize);
-						let missing_info = if missing > 0 {
-							format!(" // {} items without effect!", missing)
-						} else {
-							String::new()
-						};
-						info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
-						for item in chunk {
-							yield (StepStatus::Ok, item);
-						}
-						break
+				} else {
+					// we will only upsert and object if this current version is higher than any previously stored one
+					// (if the object has already been deleted, we still allow setting any other fields, including
+					// any previously valid full object state... probably not needed, but also not incorrect)
+					let mut c = Cursor::new(&item.bytes);
+					doc! {
+						"q": doc! { "_id": item.id.to_string() },
+						// use an aggregation pipeline in our update, so that we can conditionally update
+						// the version and object only if the previous version was lower than our current one
+						"u": vec![doc! {
+							"$set": {
+								"_id": item.id.to_string(),
+								// version_ must be added first, so that it's available in the next items in the pipeline
+								// it has a more complex condition, so it's also added if the field doesn't exist yet
+								// afterwards, the other fields can rely on it being present
+								"version_": {"$cond": { "if": { "$or": [ { "$lt": [ "$version_", v_ ] }, { "$lte": [ "$version", None::<i32> ] } ] }, "then": v_, "else": "$version_" }},
+								"version": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": v.clone(), "else": "$version" }},
+								"object": {"$cond": { "if": { "$lt": [ "$version_", v_ ] }, "then": Document::from_reader(&mut c).unwrap(), "else": "$object" }},
+							},
+						}],
+						"upsert": true,
+						"multi": false,
 					}
-					Err(err) => {
-						// the whole thing failed; retry a few times, then assume it's a bug
-						if retries_left == 0 {
-							panic!("final attempt to run mongo batch failed: {:?}", err);
-						}
-						warn!("error running mongo batch, will retry {} more times: {:?}", retries_left, err);
-						retries_left -= 1;
+				}
+			}).collect::<Vec<_>>();
+			let n = updates.len();
+			let res = db
+				.run_command(
+					doc! {
+						"update": &collection,
+						"updates": updates,
+					},
+					None,
+				)
+				.await;
+			match res {
+				Ok(res) => {
+					// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
+					if res.get_i32("n").unwrap() != n as i32 {
+						panic!(
+							"failed to execute at least one of the upserts: {:#?}",
+							res.get_array("writeErrors").unwrap()
+						);
 					}
+					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
+					let modified = res.get_i32("nModified").unwrap();
+					let missing = n - (inserted + modified as usize);
+					let missing_info =
+						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
+					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
+					for item in chunk {
+						last_tx.send((StepStatus::Ok, item)).await.unwrap();
+					}
+					break
+				}
+				Err(err) => {
+					// the whole thing failed; retry a few times, then assume it's a bug
+					if retries_left == 0 {
+						panic!("final attempt to run mongo batch failed: {:?}", err);
+					}
+					warn!("error running mongo batch, will retry {} more times: {:?}", retries_left, err);
+					retries_left -= 1;
 				}
 			}
 		}

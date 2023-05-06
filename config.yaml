@@ -7,11 +7,13 @@ queuebuffers:
   step1out: 1048576
   cpcontrolfactor: 2
   mongoinfactor: 10
+  last: 1024
 
 workers:
   # these worker counts assume just a single but powerful rpc provider like suiscan being used
   step1: 2
   step2: 3
+  mongo:
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
