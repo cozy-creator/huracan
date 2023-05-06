@@ -11,6 +11,7 @@ pub struct QueueBuffersConfig {
 	pub step1out:        usize,
 	pub cpcontrolfactor: usize,
 	pub mongoinfactor:   usize,
+	pub last:            usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -18,6 +19,7 @@ pub struct QueueBuffersConfig {
 pub struct WorkersConfig {
 	pub step1: Option<usize>,
 	pub step2: Option<usize>,
+	pub mongo: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
