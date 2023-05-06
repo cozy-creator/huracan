@@ -6,19 +6,20 @@ queuebuffers:
   # 1024 * 1024
   step1out: 1048576
   cpcontrolfactor: 2
-  mongoinfactor: 4
+  mongoinfactor: 10
 
 workers:
-  step1:
-  step2:
+  # these worker counts assume just a single but powerful rpc provider like suiscan being used
+  step1: 2
+  step2: 3
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
   #uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net
   db: sui
   collectionbase: objects
-  batchsize: 512
-  batchwaittimeoutms: 1000
+  batchsize: 1024
+  batchwaittimeoutms: 100
   retries: 2
   zstdlevel: 1
 
@@ -37,9 +38,9 @@ sui:
     - url: https://rpc-testnet.suiscan.xyz:443
       name: suiscan
       objectsquerylimit: 50
-    - url: https://sui-testnet.nodeinfra.com:443
-      name: nodeinfra
-      objectsquerylimit: 50
+#    - url: https://sui-testnet.nodeinfra.com:443
+#      name: nodeinfra
+#      objectsquerylimit: 50
   mainnet:
     # TODO add mainnet servers
     - url: ""
