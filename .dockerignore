@@ -6,3 +6,4 @@ Dockerfile
 .dockerignore
 .git
 .env
+fullscan.tmp.db
