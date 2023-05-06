@@ -40,13 +40,13 @@ sui:
     - url: https://rpc-testnet.suiscan.xyz:443
       name: suiscan
       objectsquerylimit: 50
+      # slow!
 #    - url: https://sui-testnet.nodeinfra.com:443
 #      name: nodeinfra
 #      objectsquerylimit: 50
   mainnet:
-    # TODO add mainnet servers
-    - url: ""
-      name: ""
+    - url: https://rpc-mainnet.suiscan.xyz:443
+      name: suiscan
       objectsquerylimit: 50
   step1retries: 3
   step1retrytimeoutms: 500
