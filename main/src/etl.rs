@@ -263,6 +263,8 @@ pub async fn fullscan(
 				cp_control_tx.clone(),
 			));
 		}
+		drop(object_ids_tx);
+		drop(cp_control_tx);
 	}
 
 	// step 2 workers
@@ -294,6 +296,8 @@ pub async fn fullscan(
 				}
 			});
 		}
+		drop(object_ids_rx);
+		drop(mongo_tx);
 	}
 
 	// step 3: a single worker should be fine as we can run large, efficient batches
