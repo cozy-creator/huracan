@@ -1,0 +1,31 @@
+https://graphql-sui.herokuapp.com
+https://www.apollographql.com/docs/graphos/explorer/sandbox
+
+object with 6k dynamic fields:
+
+0x74615f8bc8290370f86e39821be6e30b68d5019b1c490a847f76cd22354ad22d
+
+dyn fields: {"object.owner.ObjectOwner": "0x74615f8bc8290370f86e39821be6e30b68d5019b1c490a847f76cd22354ad22d"}
+
+sui-testnet/sui.fly_denis_objects has those
+
+--
+
+un/wrapping: sui object change ::Transferred (?) or ::Wrapped
+
+--
+
+(all queries run on may 9th on mainnet objects coll)
+
+type and content.type always match?
+{$expr: {$ne: ['$object.type', '$object.content.type']}}
+-> 0 results
+
+bcs.version == version_
+{$expr: {$ne: ['$object.bcs.version', '$version_']}}
+-> 0 results
+
+bcs: use bcs_bytes, drop the rest (duplicate info)
+content: just extract fields into top level, flatten id
+
+- how is a ObjectType::Package serialized? what do packages look like

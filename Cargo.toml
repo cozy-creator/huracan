@@ -1,2 +1,2 @@
 [workspace]
-members = ["main", "macros"]
+members = ["main", "macros", "server"]
