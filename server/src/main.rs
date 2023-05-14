@@ -105,7 +105,7 @@ impl SuiIndexedObject {
 		let c: Collection<Document> = db.collection("objects");
 		c.find(
 			doc! {
-				"object.owner.objectOwner": self._id.clone(),
+				"object.owner.ObjectOwner": self._id.clone(),
 				// TODO need to also filter for some dynamic_field portion in the type?
 			},
 			FindOptions::builder().limit(Some(limit as i64)).skip(Some(skip as u64)).build(),
@@ -203,11 +203,11 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	let struct_ = struct_.to_string();
 	// owner
 	let owner = o.get_document("owner").unwrap();
-	let (owner, ownership_type, initial_shared_version) = if let Ok(addr) = owner.get_str("addressOwner") {
+	let (owner, ownership_type, initial_shared_version) = if let Ok(addr) = owner.get_str("AddressOwner") {
 		(Some(addr.to_string()), SuiOwnershipType::Address, None)
-	} else if let Ok(addr) = owner.get_str("objectOwner") {
+	} else if let Ok(addr) = owner.get_str("ObjectOwner") {
 		(Some(addr.to_string()), SuiOwnershipType::Object, None)
-	} else if let Ok(shared) = owner.get_document("shared") {
+	} else if let Ok(shared) = owner.get_document("Shared") {
 		// FIXME
 		(None, SuiOwnershipType::Shared, Some(shared.get_i64("initial_shared_version").unwrap() as u64))
 	} else {
@@ -239,8 +239,7 @@ fn parse(o: &Document) -> SuiIndexedObject {
 		ownership_type,
 		initial_shared_version,
 		previous_transaction: o.get_str("previous_transaction").unwrap().to_string(),
-		// FIXME
-		storage_rebate: o.get_i64("storage_rebate").ok().map(|v| v as u64),
+		storage_rebate: o.get_str("storage_rebate").ok().map(|v| v.parse().unwrap()),
 		fields,
 		bcs: o.get_document("bcs").unwrap().get_binary_generic("bcs_bytes").unwrap().clone(),
 	};
