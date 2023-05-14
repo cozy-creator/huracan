@@ -16,3 +16,4 @@ anyhow = "1.0.70"
 thiserror = "1.0.40"
 serde = { version = "~1.0.125", features = ["derive"] }
 dotenv = "0.15.0"
+base64 = "0.21.0"
