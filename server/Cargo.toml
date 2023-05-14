@@ -12,3 +12,4 @@ futures = "0.3.28"
 futures-util = "0.3.28"
 mongodb = "2.5.0"
 anyhow = "1.0.70"
+serde = { version = "~1.0.125", features = ["derive"] }

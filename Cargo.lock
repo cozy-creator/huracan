@@ -9777,6 +9777,7 @@ dependencies = [
  "futures",
  "futures-util",
  "mongodb",
+ "serde 1.0.160",
 ]
 
 [[package]]
