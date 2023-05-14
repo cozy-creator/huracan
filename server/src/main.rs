@@ -2,15 +2,17 @@ use std::collections::BTreeMap;
 
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
 use async_graphql::{
-	extensions::ApolloTracing, http::GraphiQLSource, EmptyMutation, InputObject, Object, Schema, Subscription, ID,
+	extensions::ApolloTracing, http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object,
+	Schema, SimpleObject, Subscription, ID,
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
+use dotenv::dotenv;
 use futures::Stream;
 use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
-	options::FindOptions,
+	options::{ClientOptions, Compressor, FindOptions, ServerApi, ServerApiVersion},
 	Collection, Database,
 };
 use serde::{Deserialize, Serialize};
@@ -37,7 +39,9 @@ struct ObjectArgsInput {
 	skip:   Option<usize>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(complex)]
+#[graphql(name = "Object")]
 pub struct SuiIndexedObject {
 	#[graphql(name = "id")]
 	pub _id:                    String,
@@ -59,7 +63,7 @@ pub struct SuiIndexedObject {
 	pub bcs:                    Vec<u8>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[derive(Enum, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[serde(untagged)]
 #[graphql(name = "MoveValue")]
 pub enum SuiMoveValue {
@@ -73,7 +77,7 @@ pub enum SuiMoveValue {
 	Option(Box<Option<SuiMoveValue>>),
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[derive(Enum, Debug, Deserialize, Serialize, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "OwnershipType")]
 pub enum SuiOwnershipType {
 	Address,
@@ -82,7 +86,7 @@ pub enum SuiOwnershipType {
 	Immutable,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "Type")]
 pub struct SuiIndexedType {
 	pub full:     String,
@@ -94,11 +98,11 @@ pub struct SuiIndexedType {
 	pub generics: Vec<String>,
 }
 
-#[Object]
-#[graphql(name = "Object")]
+#[ComplexObject]
 impl SuiIndexedObject {
-	async fn dynamic_fields(&self, mongo: &Database, limit: usize, skip: usize) -> Vec<SuiIndexedObject> {
-		let c: Collection<Document> = mongo.collection("objects");
+	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiIndexedObject> {
+		let db: &Database = ctx.data_unchecked();
+		let c: Collection<Document> = db.collection("objects");
 		c.find(
 			doc! {
 				"object.owner.objectOwner": self._id.clone(),
@@ -128,8 +132,9 @@ pub enum QueryError {
 
 #[Object]
 impl QueryRoot {
-	async fn object(&self, mongo: &Database, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
-		let c: Collection<Document> = mongo.collection("objects");
+	async fn object(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
+		let db: &Database = ctx.data_unchecked();
+		let c: Collection<Document> = db.collection("objects");
 		match c
 			.find_one(
 				doc! {
@@ -151,17 +156,20 @@ impl QueryRoot {
 		}
 	}
 
-	async fn objects(&self, _args: ObjectArgsInput) -> Vec<String> {
+	async fn objects(&self, ctx: &Context<'_>, _args: ObjectArgsInput) -> Vec<String> {
+		let _db: &Database = ctx.data_unchecked();
 		vec![format!("hello")]
 	}
 
 	// + owners
-	async fn owner(&self, address: ID) -> String {
+	async fn owner(&self, ctx: &Context<'_>, address: ID) -> String {
+		let _db: &Database = ctx.data_unchecked();
 		format!("hello {}", *address)
 	}
 
 	// + transactions
-	async fn transaction(&self, digest: ID) -> String {
+	async fn transaction(&self, ctx: &Context<'_>, digest: ID) -> String {
+		let _db: &Database = ctx.data_unchecked();
 		format!("hello {}", *digest)
 	}
 
@@ -263,7 +271,21 @@ const API_PREFIX: &'static str = "/api/v1";
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
+	dotenv().ok();
+	let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
+	let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
+
+	let db = {
+		let mut client_options = ClientOptions::parse(mongo_uri).await?;
+		// use zstd compression for messages
+		client_options.compressors = Some(vec![Compressor::Zstd { level: None }]);
+		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+		let client = mongodb::Client::with_options(client_options)?;
+		client.database(&mongo_db)
+	};
+
 	let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
+		.data(db)
 		.extension(ApolloTracing)
 		.limit_depth(10)
 		// 32 is also the default

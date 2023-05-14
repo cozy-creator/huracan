@@ -9775,6 +9775,7 @@ dependencies = [
  "async-graphql-actix-web",
  "async-stream",
  "bson",
+ "dotenv",
  "futures",
  "futures-util",
  "mongodb",
