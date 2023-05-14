@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
 use async_graphql::{
-	extensions::ApolloTracing, http::GraphiQLSource, EmptyMutation, InputObject, Object, Schema, SimpleObject,
-	Subscription, ID,
+	extensions::ApolloTracing, http::GraphiQLSource, EmptyMutation, InputObject, Object, Schema, Subscription, ID,
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
 use futures::Stream;
+use serde::{Deserialize, Serialize};
 use web::{resource, Data};
 
 type RootSchema = Schema<QueryRoot, EmptyMutation, SubscriptionRoot>;
@@ -30,7 +30,7 @@ struct ObjectArgsInput {
 	skip:   Option<usize>,
 }
 
-#[derive(SimpleObject)]
+#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 pub struct SuiIndexedObject {
 	pub id:                     String,
 	pub version:                u64,
@@ -59,6 +59,7 @@ pub enum SuiMoveValue {
 	Option(Box<Option<SuiMoveValue>>),
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 pub enum SuiOwnershipType {
 	Address,
 	Object,
@@ -66,6 +67,7 @@ pub enum SuiOwnershipType {
 	Immutable,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 pub struct SuiIndexedType {
 	pub type_:    String,
 	pub package:  String,
