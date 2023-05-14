@@ -59,7 +59,9 @@ pub struct SuiIndexedObject {
 	pub previous_transaction:   String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub storage_rebate:         Option<u64>,
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	pub fields:                 BTreeMap<String, SuiMoveValue>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub bcs:                    Vec<u8>,
 }
 
