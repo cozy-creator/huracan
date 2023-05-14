@@ -75,7 +75,7 @@ pub enum SuiMoveValue {
 	Vector(SuiMoveVec),
 	String(SuiMoveString),
 	ID(SuiMoveID),
-	Struct(SuiIndexedType),
+	Struct(SuiMoveStruct),
 	Null(SuiMoveNull),
 }
 
@@ -123,6 +123,13 @@ pub struct SuiMoveVec {
 	value: Vec<SuiMoveValue>,
 }
 
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveStruct")]
+pub struct SuiMoveStruct {
+	type_:  String,
+	fields: BTreeMap<String, SuiMoveValue>,
+}
+
 #[derive(Enum, Debug, Deserialize, Serialize, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "OwnershipType")]
 pub enum SuiOwnershipType {
@@ -144,6 +151,27 @@ pub struct SuiIndexedType {
 	pub generics: Vec<String>,
 }
 
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "DynamicField")]
+pub struct SuiDynamicField {
+	// all relevant generic object fields
+	#[graphql(name = "id")]
+	pub _id:                  String,
+	pub version:              u64,
+	pub digest:               String,
+	pub previous_transaction: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub storage_rebate:       Option<u64>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub bcs:                  Vec<u8>,
+
+	// fields specifically tailored for dynamic fields
+	pub key_type:   String,
+	pub value_type: String,
+	pub key:        SuiMoveValue,
+	pub value:      SuiMoveValue,
+}
+
 #[ComplexObject]
 impl SuiIndexedObject {
 	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiIndexedObject> {
@@ -152,7 +180,7 @@ impl SuiIndexedObject {
 		c.find(
 			doc! {
 				"object.owner.ObjectOwner": self._id.clone(),
-				// TODO need to also filter for some dynamic_field portion in the type?
+				"object.type": doc! { "$regex": "^0x2::dynamic_field::Field<"},
 			},
 			FindOptions::builder().limit(Some(limit as i64)).skip(Some(skip as u64)).build(),
 		)
