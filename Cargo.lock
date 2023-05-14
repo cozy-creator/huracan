@@ -9774,10 +9774,12 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "async-stream",
+ "bson",
  "futures",
  "futures-util",
  "mongodb",
  "serde 1.0.160",
+ "thiserror",
 ]
 
 [[package]]
