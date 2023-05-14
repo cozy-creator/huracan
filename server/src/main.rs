@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
 use async_graphql::{
 	extensions::ApolloTracing, http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object,
-	Schema, SimpleObject, Subscription, ID,
+	Schema, SimpleObject, Subscription, Union, ID,
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
@@ -65,18 +65,62 @@ pub struct SuiIndexedObject {
 	pub bcs:                    Vec<u8>,
 }
 
-#[derive(Enum, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[derive(Union, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[serde(untagged)]
 #[graphql(name = "MoveValue")]
 pub enum SuiMoveValue {
-	Number(u32),
-	Bool(bool),
-	Address(String),
-	Vector(Vec<SuiMoveValue>),
-	String(String),
-	ID(String),
+	Number(SuiMoveNumber),
+	Bool(SuiMoveBool),
+	Address(SuiMoveAddress),
+	Vector(SuiMoveVec),
+	String(SuiMoveString),
+	ID(SuiMoveID),
 	Struct(SuiIndexedType),
-	Option(Box<Option<SuiMoveValue>>),
+	Null(SuiMoveNull),
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveNumber")]
+pub struct SuiMoveNumber {
+	value: u32,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveBool")]
+pub struct SuiMoveBool {
+	value: bool,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveAddress")]
+pub struct SuiMoveAddress {
+	value: String,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveString")]
+pub struct SuiMoveString {
+	value: String,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveID")]
+pub struct SuiMoveID {
+	value: String,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveNull")]
+pub struct SuiMoveNull {
+	// XXX we don't really want to put any value here, but all union members need to be objects
+	//		so we're declaring an option type that will just always be None -> null
+	value: Option<bool>,
+}
+
+#[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[graphql(name = "MoveVec")]
+pub struct SuiMoveVec {
+	value: Vec<SuiMoveValue>,
 }
 
 #[derive(Enum, Debug, Deserialize, Serialize, Copy, Clone, Eq, PartialEq)]
@@ -183,6 +227,7 @@ impl QueryRoot {
 	// should we index package signatures? so you can also search by those, find all objects touched by any of their fns? or structs or modules
 }
 
+/// Parses the pre-graphql-optimized version of a doc into the GraphQL format.
 fn parse(o: &Document) -> SuiIndexedObject {
 	// type
 	let ty = o.get_str("type").unwrap();
@@ -224,7 +269,7 @@ fn parse(o: &Document) -> SuiIndexedObject {
 			.iter()
 			.map(|(k, v)| {
 				// TODO parse v into SuiMoveValue struct
-				let v = SuiMoveValue::ID(v.to_string());
+				let v = SuiMoveValue::String(SuiMoveString { value: v.to_string() });
 				(k.clone(), v)
 			})
 			.collect()
