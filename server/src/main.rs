@@ -158,6 +158,8 @@ pub struct SuiDynamicField {
 	#[graphql(name = "id")]
 	pub _id:                  String,
 	pub version:              u64,
+	#[graphql(name = "type")]
+	pub type_:                String,
 	pub digest:               String,
 	pub previous_transaction: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -174,7 +176,7 @@ pub struct SuiDynamicField {
 
 #[ComplexObject]
 impl SuiIndexedObject {
-	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiIndexedObject> {
+	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiDynamicField> {
 		let db: &Database = ctx.data_unchecked();
 		let c: Collection<Document> = db.collection("objects");
 		c.find(
@@ -187,6 +189,23 @@ impl SuiIndexedObject {
 		.await
 		.unwrap()
 		.map_ok(|o| parse(&o))
+		.map_ok(|o| {
+			let key_type = o.type_.generics[0].clone();
+			let value_type = o.type_.generics[1].clone();
+			SuiDynamicField {
+				_id: o._id,
+				version: o.version,
+				type_: o.type_.full,
+				digest: o.digest,
+				previous_transaction: o.previous_transaction,
+				storage_rebate: o.storage_rebate,
+				bcs: o.bcs,
+				key_type,
+				value_type,
+				key: o.fields.get("name").unwrap().clone(),
+				value: o.fields.get("value").unwrap().clone(),
+			}
+		})
 		.try_collect()
 		.await
 		.unwrap()
