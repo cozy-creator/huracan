@@ -9774,6 +9774,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "async-stream",
+ "base64 0.21.0",
  "bson",
  "dotenv",
  "futures",

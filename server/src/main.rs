@@ -7,6 +7,7 @@ use async_graphql::{
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
+use base64::Engine;
 use dotenv::dotenv;
 use futures::Stream;
 use futures_util::TryStreamExt;
@@ -178,7 +179,7 @@ pub struct SuiDynamicField {
 impl SuiIndexedObject {
 	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiDynamicField> {
 		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("objects");
+		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
 		c.find(
 			doc! {
 				"object.owner.ObjectOwner": self._id.clone(),
@@ -227,7 +228,7 @@ pub enum QueryError {
 impl QueryRoot {
 	async fn object(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
 		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("objects");
+		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
 		match c
 			.find_one(
 				doc! {
@@ -237,10 +238,7 @@ impl QueryRoot {
 			)
 			.await
 		{
-			Ok(Some(o)) => {
-				let o = o.get_document("object").unwrap();
-				Ok(Some(parse(o)))
-			}
+			Ok(Some(o)) => Ok(Some(parse(&o))),
 			Ok(None) => Ok(None),
 			Err(e) => {
 				// TODO handle error variants in detail, don't just pass mongo errors through to user
@@ -276,6 +274,11 @@ impl QueryRoot {
 
 /// Parses the pre-graphql-optimized version of a doc into the GraphQL format.
 fn parse(o: &Document) -> SuiIndexedObject {
+	// items from top-level document
+	let id = o.get_str("_id").unwrap().to_string();
+	let version = o.get_i64("version_").unwrap() as u64;
+	// from here on we're working with the actual object in "object" field:
+	let o = o.get_document("object").unwrap();
 	// type
 	let ty = o.get_str("type").unwrap();
 	let mut it = ty.split("::");
@@ -323,19 +326,22 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	} else {
 		Default::default()
 	};
+	let bcs_val = o.get_document("bcs").unwrap().get_str("bcsBytes").unwrap();
+	let mut bcs = vec![0u8; base64::decoded_len_estimate(bcs_val.len())];
+	base64::engine::general_purpose::STANDARD.decode_slice(bcs_val, &mut bcs).unwrap();
 	let o = SuiIndexedObject {
-		_id: o.get_object_id("_id").unwrap().to_string(),
+		_id: id,
 		// FIXME
-		version: o.get_i64("version_").unwrap() as u64,
+		version,
 		digest: o.get_str("digest").unwrap().to_string(),
 		type_: SuiIndexedType { full: ty.to_string(), package, module, struct_, generics },
 		owner,
 		ownership_type,
 		initial_shared_version,
-		previous_transaction: o.get_str("previous_transaction").unwrap().to_string(),
-		storage_rebate: o.get_str("storage_rebate").ok().map(|v| v.parse().unwrap()),
+		previous_transaction: o.get_str("previousTransaction").unwrap().to_string(),
+		storage_rebate: o.get_str("storageRebate").ok().map(|v| v.parse().unwrap()),
 		fields,
-		bcs: o.get_document("bcs").unwrap().get_binary_generic("bcs_bytes").unwrap().clone(),
+		bcs,
 	};
 	o
 }
@@ -387,14 +393,18 @@ async fn main() -> anyhow::Result<()> {
 		.finish();
 
 	Ok(HttpServer::new(move || {
-		App::new().app_data(Data::new(schema.clone())).service(
-			web::scope(API_PREFIX)
-				.service(index)
-				.service(index_graphiql)
-				// not sure how to make this configuration line shorter, if at all possible
-				// actix-web doesn't seem to go very far in their support for config via attributes
-				.service(resource("/").guard(guard::Get()).guard(guard::Header("upgrade", "websocket")).to(index_ws)),
-		)
+		App::new()
+			.app_data(Data::new(schema.clone()))
+			.service(
+				web::scope(API_PREFIX)
+					.service(index)
+					// not sure how to make this configuration line shorter, if at all possible
+					// actix-web doesn't seem to go very far in their support for config via attributes
+					.service(
+						resource("/").guard(guard::Get()).guard(guard::Header("upgrade", "websocket")).to(index_ws),
+					),
+			)
+			.service(index_graphiql)
 	})
 	.bind(("127.0.0.1", 8000))?
 	.run()
@@ -404,7 +414,8 @@ async fn main() -> anyhow::Result<()> {
 // graphiql
 #[get("/")]
 async fn index_graphiql() -> WebResult<HttpResponse> {
+	let endpoint = format!("{}/", API_PREFIX);
 	Ok(HttpResponse::Ok()
 		.content_type("text/html; charset=utf-8")
-		.body(GraphiQLSource::build().endpoint(API_PREFIX).subscription_endpoint(API_PREFIX).finish()))
+		.body(GraphiQLSource::build().endpoint(&endpoint).subscription_endpoint(&endpoint).finish()))
 }
