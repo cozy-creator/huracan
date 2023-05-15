@@ -45,6 +45,7 @@ struct ObjectArgsInput {
 #[graphql(complex)]
 #[graphql(name = "Object")]
 pub struct SuiIndexedObject {
+	// TODO fix ID types
 	#[graphql(name = "id")]
 	pub _id:                    String,
 	pub version:                u64,
