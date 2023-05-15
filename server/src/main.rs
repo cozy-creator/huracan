@@ -8,6 +8,7 @@ use async_graphql::{
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
 use base64::Engine;
+use bson::Bson;
 use dotenv::dotenv;
 use futures::Stream;
 use futures_util::TryStreamExt;
@@ -177,7 +178,12 @@ pub struct SuiDynamicField {
 
 #[ComplexObject]
 impl SuiIndexedObject {
-	async fn dynamic_fields(&self, ctx: &Context<'_>, limit: usize, skip: usize) -> Vec<SuiDynamicField> {
+	async fn dynamic_fields(
+		&self,
+		ctx: &Context<'_>,
+		limit: Option<usize>,
+		skip: Option<usize>,
+	) -> Vec<SuiDynamicField> {
 		let db: &Database = ctx.data_unchecked();
 		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
 		c.find(
@@ -185,7 +191,7 @@ impl SuiIndexedObject {
 				"object.owner.ObjectOwner": self._id.clone(),
 				"object.type": doc! { "$regex": "^0x2::dynamic_field::Field<"},
 			},
-			FindOptions::builder().limit(Some(limit as i64)).skip(Some(skip as u64)).build(),
+			FindOptions::builder().limit(limit.map(|v| v as i64)).skip(skip.map(|v| v as u64)).build(),
 		)
 		.await
 		.unwrap()
@@ -291,7 +297,7 @@ fn parse(o: &Document) -> SuiIndexedObject {
 		let terms = it.next().unwrap();
 		let terms = &terms[..terms.len() - 1];
 		for term in terms.split(",") {
-			generics.push(term.to_string());
+			generics.push(term.trim_start().to_string());
 		}
 		s
 	} else {
@@ -310,25 +316,17 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	} else {
 		(None, SuiOwnershipType::Immutable, None)
 	};
-	// fields
+	// fields: only for moveObject-s
 	let content = o.get_document("content").unwrap();
-	let fields = if let Ok("moveObject") = content.get_str("dataType") {
-		content
-			.get_document("fields")
-			.unwrap()
-			.iter()
-			.map(|(k, v)| {
-				// TODO parse v into SuiMoveValue struct
-				let v = SuiMoveValue::String(SuiMoveString { value: v.to_string() });
-				(k.clone(), v)
-			})
-			.collect()
-	} else {
-		Default::default()
+	let fields =
+		if let Ok("moveObject") = content.get_str("dataType") { parse_fields(content) } else { Default::default() };
+	// TODO move bcs into function, so we don't have to allocate + decode base64 unless asked for
+	let bcs = {
+		let bcs_val = o.get_document("bcs").unwrap().get_str("bcsBytes").unwrap();
+		let mut bcs = vec![0u8; base64::decoded_len_estimate(bcs_val.len())];
+		base64::engine::general_purpose::STANDARD.decode_slice(bcs_val, &mut bcs).unwrap();
+		bcs
 	};
-	let bcs_val = o.get_document("bcs").unwrap().get_str("bcsBytes").unwrap();
-	let mut bcs = vec![0u8; base64::decoded_len_estimate(bcs_val.len())];
-	base64::engine::general_purpose::STANDARD.decode_slice(bcs_val, &mut bcs).unwrap();
 	let o = SuiIndexedObject {
 		_id: id,
 		// FIXME
@@ -344,6 +342,47 @@ fn parse(o: &Document) -> SuiIndexedObject {
 		bcs,
 	};
 	o
+}
+
+fn parse_fields(o: &Document) -> BTreeMap<String, SuiMoveValue> {
+	o.get_document("fields").unwrap().iter().map(|(k, v)| (k.clone(), parse_value(v))).collect()
+}
+
+fn parse_value(v: &Bson) -> SuiMoveValue {
+	// if it's an object:
+	//	if it has .type and .fields -> struct
+	//	if it has .id -> id
+	//	else -> panic
+	// not sure about address
+	// rest just map types
+	if let Some(doc) = v.as_document() {
+		if doc.contains_key("type") && doc.contains_key("fields") {
+			SuiMoveValue::Struct(SuiMoveStruct {
+				type_:  doc.get_str("type").unwrap().into(),
+				fields: parse_fields(doc),
+			})
+		} else if doc.contains_key("id") && doc.keys().count() == 1 {
+			SuiMoveValue::ID(SuiMoveID { value: doc.get_str("id").unwrap().into() })
+		} else {
+			panic!("don't know how to parse into move value: {:?}\n\nparent: {:?}", doc, v);
+		}
+	} else if let Some(value) = v.as_i32() {
+		// FIXME conversion
+		SuiMoveValue::Number(SuiMoveNumber { value: value as u32 })
+	} else if let Some(value) = v.as_i64() {
+		// FIXME conversion
+		SuiMoveValue::Number(SuiMoveNumber { value: value as u32 })
+	} else if let Some(value) = v.as_bool() {
+		SuiMoveValue::Bool(SuiMoveBool { value })
+	} else if let Some(value) = v.as_str() {
+		SuiMoveValue::String(SuiMoveString { value: value.into() })
+	} else if let Some(value) = v.as_array() {
+		SuiMoveValue::Vector(SuiMoveVec { value: value.iter().map(|v| parse_value(v)).collect() })
+	} else if let Some(_) = v.as_null() {
+		SuiMoveValue::Null(SuiMoveNull { value: None })
+	} else {
+		panic!("failed to parse into move value: {:?}", v)
+	}
 }
 
 struct SubscriptionRoot;
