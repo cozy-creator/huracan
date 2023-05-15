@@ -83,31 +83,31 @@ pub enum SuiMoveValue {
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveNumber")]
 pub struct SuiMoveNumber {
-	value: u32,
+	pub value: u32,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveBool")]
 pub struct SuiMoveBool {
-	value: bool,
+	pub value: bool,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveAddress")]
 pub struct SuiMoveAddress {
-	value: String,
+	pub value: String,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveString")]
 pub struct SuiMoveString {
-	value: String,
+	pub value: String,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveID")]
 pub struct SuiMoveID {
-	value: String,
+	pub value: String,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
@@ -115,20 +115,20 @@ pub struct SuiMoveID {
 pub struct SuiMoveNull {
 	// XXX we don't really want to put any value here, but all union members need to be objects
 	//		so we're declaring an option type that will just always be None -> null
-	value: Option<bool>,
+	pub value: Option<bool>,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveVec")]
 pub struct SuiMoveVec {
-	value: Vec<SuiMoveValue>,
+	pub value: Vec<SuiMoveValue>,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveStruct")]
 pub struct SuiMoveStruct {
-	type_:  String,
-	fields: BTreeMap<String, SuiMoveValue>,
+	pub type_:  String,
+	pub fields: BTreeMap<String, SuiMoveValue>,
 }
 
 #[derive(Enum, Debug, Deserialize, Serialize, Copy, Clone, Eq, PartialEq)]
