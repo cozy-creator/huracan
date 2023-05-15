@@ -13,8 +13,8 @@ use futures::Stream;
 use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
-	options::{ClientOptions, Compressor, FindOptions, ServerApi, ServerApiVersion},
-	Collection, Database,
+	options::{ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
+	Collection, Database, IndexModel,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -373,6 +373,7 @@ async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
 	let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
 	let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
+	let mongo_collection = std::env::var("APP_MONGO_COLLECTION").unwrap_or("dev_testnet_wrappingtest2".into());
 
 	let db = {
 		let mut client_options = ClientOptions::parse(mongo_uri).await?;
@@ -380,7 +381,39 @@ async fn main() -> anyhow::Result<()> {
 		client_options.compressors = Some(vec![Compressor::Zstd { level: None }]);
 		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
 		let client = mongodb::Client::with_options(client_options)?;
-		client.database(&mongo_db)
+		let db = client.database(&mongo_db);
+		let coll = db.collection::<Document>(&mongo_collection);
+		// create index for object.owner.ObjectOwner
+		coll.create_index(
+			IndexModel::builder()
+				.keys(doc! {
+					"object.owner.ObjectOwner": 1,
+				})
+				.options(Some(
+					IndexOptions::builder()
+						.partial_filter_expression(doc! {"object.owner.ObjectOwner": doc!{"$exists": true}})
+						.build(),
+				))
+				.build(),
+			None,
+		)
+		.await
+		.unwrap();
+		println!("ensured index exists: object owner");
+		// create index for object.type
+		coll.create_index(
+			IndexModel::builder()
+				.keys(doc! {
+					"object.type": 1,
+				})
+				.options(None)
+				.build(),
+			None,
+		)
+		.await
+		.unwrap();
+		println!("ensured index exists: object type");
+		db
 	};
 
 	let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
