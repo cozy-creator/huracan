@@ -286,24 +286,23 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	// from here on we're working with the actual object in "object" field:
 	let o = o.get_document("object").unwrap();
 	// type
+	// split on just the first '<' to separate path from generics, if any
+	// then for path, split parts on '::'; for generics, split on ','
 	let ty = o.get_str("type").unwrap();
-	let mut it = ty.split("::");
-	let package = it.next().unwrap().to_string();
-	let module = it.next().unwrap().to_string();
-	let struct_ = it.next().unwrap();
-	let mut it = struct_.split("<");
 	let mut generics = Vec::new();
-	let struct_ = if let Some(s) = it.next() {
-		let terms = it.next().unwrap();
+	let ty = if let Some((ty, terms)) = ty.split_once('<') {
 		let terms = &terms[..terms.len() - 1];
 		for term in terms.split(",") {
 			generics.push(term.trim_start().to_string());
 		}
-		s
+		ty
 	} else {
-		struct_
+		ty
 	};
-	let struct_ = struct_.to_string();
+	let mut it = ty.split("::");
+	let package = it.next().unwrap().to_string();
+	let module = it.next().unwrap().to_string();
+	let struct_ = it.next().unwrap().to_string();
 	// owner
 	let owner = o.get_document("owner").unwrap();
 	let (owner, ownership_type, initial_shared_version) = if let Ok(addr) = owner.get_str("AddressOwner") {
