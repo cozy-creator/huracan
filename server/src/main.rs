@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
 use async_graphql::{
-	extensions::ApolloTracing, http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object,
-	Schema, SimpleObject, Subscription, Union, ID,
+	http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object, Schema, SimpleObject,
+	Subscription, Union, ID,
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
@@ -418,7 +418,8 @@ async fn main() -> anyhow::Result<()> {
 
 	let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
 		.data(db)
-		.extension(ApolloTracing)
+		// TODO activate later or on demand or something, don't need that noise for now
+		// .extension(async_graphql::extensions::ApolloTracing)
 		.limit_depth(10)
 		// 32 is also the default
 		.limit_recursive_depth(32)
