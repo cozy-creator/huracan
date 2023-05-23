@@ -11,6 +11,25 @@ use crate::_prelude::*;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PipelineConfig {
+	pub queuebuffers:        QueueBuffersConfig,
+	pub workers:             WorkersConfig,
+	pub mongo:               MongoPipelineStepConfig,
+	pub step1retries:        usize,
+	pub step1retrytimeoutms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MongoPipelineStepConfig {
+	pub batchsize:          usize,
+	pub batchwaittimeoutms: u64,
+	pub retries:            usize,
+	pub zstdlevel:          i32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QueueBuffersConfig {
 	pub step1out:        usize,
 	pub cpcontrolfactor: usize,
@@ -29,20 +48,16 @@ pub struct WorkersConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MongoConfig {
-	pub uri:                String,
-	pub db:                 String,
-	pub collectionbase:     String,
-	pub batchsize:          usize,
-	pub batchwaittimeoutms: u64,
-	pub retries:            usize,
-	pub zstdlevel:          i32,
+	pub uri:            String,
+	pub db:             String,
+	pub collectionbase: String,
 }
 
 impl MongoConfig {
-	pub async fn client(&self) -> anyhow::Result<Database> {
+	pub async fn client(&self, pc: &MongoPipelineStepConfig) -> anyhow::Result<Database> {
 		let mut client_options = ClientOptions::parse(&self.uri).await?;
 		// use zstd compression for messages
-		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(self.zstdlevel) }]);
+		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(pc.zstdlevel) }]);
 		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
 		let client = mongodb::Client::with_options(client_options)?;
 		Ok(client.database(&self.db))
@@ -87,15 +102,15 @@ pub struct SuiConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
-	pub env:          String,
-	pub net:          String,
-	pub rocksdbfile:  String,
-	pub queuebuffers: QueueBuffersConfig,
-	pub workers:      WorkersConfig,
-	pub mongo:        MongoConfig,
-	pub pulsar:       PulsarConfig,
-	pub sui:          SuiConfig,
-	pub log:          LogConfig,
+	pub env:         String,
+	pub net:         String,
+	pub rocksdbfile: String,
+	pub throughput:  PipelineConfig,
+	pub lowlatency:  PipelineConfig,
+	pub mongo:       MongoConfig,
+	pub pulsar:      PulsarConfig,
+	pub sui:         SuiConfig,
+	pub log:         LogConfig,
 }
 
 impl AppConfig {
