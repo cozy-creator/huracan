@@ -1,31 +1,26 @@
 use std::{
-	cmp::Ordering,
 	fmt::{Display, Formatter},
 	io::Cursor,
 	iter::zip,
-	sync::atomic::{AtomicBool, Ordering::Relaxed},
+	sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed},
 };
 
 use anyhow::Result;
 use async_channel::Sender as ACSender;
 use async_stream::stream;
-use bson::{doc, oid::ObjectId, Document};
+use bson::{doc, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
-use futures_util::SinkExt;
 use macros::with_client_rotation;
-use mongodb::{
-	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
-	Database,
-};
+use mongodb::Database;
 use pulsar::{Producer, Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::{
 	apis::ReadApi,
 	error::SuiRpcResult,
 	rpc_types::{
-		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectData, SuiObjectDataOptions,
-		SuiObjectResponse, SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
+		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectDataOptions, SuiObjectResponse,
+		SuiPastObjectResponse, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery,
 		TransactionBlocksPage,
 	},
 	SuiClient, SuiClientBuilder,
@@ -37,24 +32,21 @@ use sui_types::{
 	messages_checkpoint::CheckpointSequenceNumber,
 	query::TransactionFilter,
 };
-use tokio::{pin, sync::mpsc::Sender as TSender};
+use tokio::{
+	pin,
+	sync::mpsc::{Sender as TSender, UnboundedSender},
+};
 
 use crate::{
 	_prelude::*,
-	conf::{AppConfig, MongoConfig, RpcProviderConfig},
+	conf::{AppConfig, RpcProviderConfig},
+	ctrl_c_bool,
 	utils::make_descending_ranges,
 };
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Change {
-	Created,
-	Mutated,
-	Deleted,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectItem {
@@ -65,35 +57,13 @@ pub struct ObjectItem {
 	pub bytes:    Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
-pub struct ObjectSnapshot {
-	pub change:    Change,
-	pub object_id: ObjectID,
-	pub version:   SequenceNumber,
-	pub object:    Option<Vec<u8>>,
-}
-
-impl ObjectSnapshot {
-	fn from(change: SuiObjectChange) -> Option<(Self, String)> {
-		use SuiObjectChange::*;
-		let res = match change {
-			Created { object_id, version, object_type, .. } => {
-				(Self { change: Change::Created, object_id, version, object: None }, object_type.to_string())
-			}
-			Mutated { object_id, version, object_type, .. } => {
-				(Self { change: Change::Mutated, object_id, version, object: None }, object_type.to_string())
-			}
-			Deleted { object_id, version, object_type, .. } => {
-				(Self { change: Change::Deleted, object_id, version, object: None }, object_type.to_string())
-			}
-			_ => return None,
-		};
-		Some(res)
-	}
-
-	fn get_past_object_request(&self) -> SuiGetPastObjectRequest {
-		SuiGetPastObjectRequest { object_id: self.object_id, version: self.version }
-	}
+fn parse_change(change: SuiObjectChange) -> Option<(ObjectID, SequenceNumber, bool)> {
+	use SuiObjectChange::*;
+	Some(match change {
+		Created { object_id, version, .. } | Mutated { object_id, version, .. } => (object_id, version, false),
+		Deleted { object_id, version, .. } => (object_id, version, true),
+		_ => return None,
+	})
 }
 
 #[derive(Clone)]
@@ -125,7 +95,7 @@ impl Client {
 
 impl ClientPool {
 	pub async fn new(configs: Vec<RpcProviderConfig>) -> Result<Self> {
-		let mut clients = Vec::with_capacity(configs.len());
+		let clients = Vec::with_capacity(configs.len());
 		let mut self_ = Self { configs, clients };
 		self_.clients.push(self_.make_client(0).await?);
 		Ok(self_)
@@ -191,7 +161,53 @@ impl ClientPool {
 	}
 }
 
-pub async fn fullscan(
+pub async fn start(
+	_cfg: &AppConfig,
+	sui: ClientPool,
+	_pulsar: Pulsar<TokioExecutor>,
+	_rx_term: tokio::sync::oneshot::Receiver<()>,
+) -> Result<()> {
+	let stop = ctrl_c_bool();
+	let throttle = Arc::new(AtomicU16::new(0));
+	let (observed_checkpoints_tx, _observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
+	let (poll_tx, _poll_rx) = tokio::sync::mpsc::channel(1024);
+
+	// poll for latest txs
+	// (low-latency focus)
+	tokio::spawn({
+		let stop = stop.clone();
+		let throttle = throttle.clone();
+		let sui = sui.clone();
+
+		async move {
+			poll(sui, stop, throttle, observed_checkpoints_tx, poll_tx).await;
+		}
+	});
+
+	// observe checkpoints flow:
+	// if we fell behind too far, we focus on throughput until caught up:
+	// 	spawn scan + throttle low-latency work
+	// else ensure completion of latest checkpoints
+	tokio::spawn({
+		let stop = stop.clone();
+
+		async move {
+			loop {
+				if stop.load(Relaxed) {
+					break
+				}
+
+				todo!();
+				// tokio::select! {}
+			}
+		}
+	});
+
+	Ok(())
+}
+
+#[allow(unused)]
+async fn scan(
 	cfg: &AppConfig,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
@@ -199,14 +215,7 @@ pub async fn fullscan(
 ) -> Result<()> {
 	let db = Arc::new(DBWithThreadMode::<SingleThreaded>::open_default(&cfg.rocksdbfile).unwrap());
 
-	let mongo = {
-		let mut client_options = ClientOptions::parse(&cfg.mongo.uri).await?;
-		// use zstd compression for messages
-		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(cfg.mongo.zstdlevel) }]);
-		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
-		let client = mongodb::Client::with_options(client_options)?;
-		client.database(&cfg.mongo.db)
-	};
+	let mongo = cfg.mongo.client().await?;
 
 	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
 
@@ -236,7 +245,7 @@ pub async fn fullscan(
 	let (cp_control_tx, mut cp_control_rx) =
 		tokio::sync::mpsc::channel(num_step1_workers * cfg.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
-	let (mongo_tx, mut mongo_rx) =
+	let (mongo_tx, mongo_rx) =
 		async_channel::bounded(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor * num_mongo_workers);
 	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(cfg.queuebuffers.last);
 
@@ -307,7 +316,10 @@ pub async fn fullscan(
 	// step 3: mongo workers
 	{
 		for _ in 0..num_mongo_workers {
-			tokio::spawn(load(cfg.clone(), mongo_rx.clone(), mongo.clone(), last_tx.clone()));
+			let mongo_rx = mongo_rx.clone();
+			let mongo_rx =
+				mongo_rx.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
+			tokio::spawn(load_batched(cfg.clone(), mongo_rx, mongo.clone(), last_tx.clone()));
 		}
 		drop(mongo_rx);
 		drop(last_tx);
@@ -449,13 +461,8 @@ async fn fullscan_extract(
 					for tx_block in page.data {
 						if let Some(changes) = tx_block.object_changes {
 							for change in changes {
-								use SuiObjectChange::*;
-								let (object_id, version, deleted) = match change {
-									Created { object_id, version, .. } | Mutated { object_id, version, .. } => {
-										(object_id, version, false)
-									}
-									Deleted { object_id, version, .. } => (object_id, version, true),
-									_ => continue,
+								let Some((object_id, version, deleted)) = parse_change(change) else {
+									continue;
 								};
 								let k = object_id.as_slice();
 								// known?
@@ -507,68 +514,97 @@ async fn fullscan_extract(
 	}
 }
 
-pub async fn extract<'a, P: FnMut(Option<TransactionDigest>, TransactionDigest) + 'a>(
+// poll for latest transaction blocks until either:
+// we hit a tx that we've already processed -- can store in memory and just re-poll on restart
+// we hit a tx that's part of the latest checkpoint we've already completed
+
+// polling:
+// configured poll_interval, e.g. 50ms
+// use first configured rpc source, assuming that's our lowest-latency one
+pub async fn poll(
 	mut sui: ClientPool,
-	mut rx_term: tokio::sync::oneshot::Receiver<()>,
-	start_from: Option<TransactionDigest>,
-	mut on_next_page: P,
-) -> Result<impl Stream<Item = ObjectSnapshot> + 'a> {
+	stop: Arc<AtomicBool>,
+	throttle: Arc<AtomicU16>,
+	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
+	tx: tokio::sync::mpsc::Sender<ObjectItem>,
+) {
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 	);
-	let mut cursor = start_from;
-	let mut skip_page = false;
+
+	let mut cursor = None;
 	let mut retry_count = 0;
+	let mut desc = true;
+	let mut checkpoints = HashSet::with_capacity(64);
+	const MIN_POLL_INTERVAL_MS: u64 = 16;
+	let mut last_poll = Instant::now().checked_sub(Duration::from_millis(MIN_POLL_INTERVAL_MS)).unwrap();
 
-	Ok(stream! {
-		loop {
-			tokio::select! {
-				page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), false) => {
-					match page {
-						Ok(page) => {
-							retry_count = 0;
-							if !skip_page {
-								for tx_block in page.data {
-									if let Some(changes) = tx_block.object_changes {
-										for change in changes {
-											if let Some((change, _object_type)) = ObjectSnapshot::from(change) {
-												// step 1 object skipping filters:
-												// for now we want all objects, might handle these differently later
+	loop {
+		if stop.load(Relaxed) {
+			break
+		}
+		{
+			let throttle = throttle.load(Relaxed);
+			if throttle > 0 {
+				tokio::time::sleep(Duration::from_millis(throttle as u64)).await;
+			}
+		}
+		{
+			let wait_ms = MIN_POLL_INTERVAL_MS - last_poll.elapsed().as_millis() as u64;
+			if wait_ms > 0 {
+				tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+			}
+		}
+		let call_start = Instant::now();
+		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
+			Ok(mut page) => {
+				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
+				last_poll = call_start;
+				retry_count = 0;
+				if page.data.is_empty() {
+					info!("no new txs when querying with desc={} cursor={:?}, retrying immediately", desc, cursor);
+					continue
+				}
+				// we want to process items in asc order
+				if desc {
+					page.data.reverse();
+					// and we only want to query for desc order for the first iteration, since at that
+					// point we don't have a tx id to start from for querying in asc order
+					desc = false;
+				}
+				cursor = Some(page.data.last().unwrap().digest);
 
-												// // skip objects of type "coin"
-												// if object_type.starts_with("0x2::coin::Coin") {
-												// 	continue
-												// }
-												yield change;
-											}
-										}
-									}
-								}
-							}
-							if page.next_cursor.is_none() {
-								// TODO if we had an API that could give us the prev/next tx digests for any given tx digest
-								//		we could solve this a little more elegantly!
-								info!("no next page info from sui, will try to find the next page after a short timeout...");
-								skip_page = true;
-								tokio::time::sleep(Duration::from_millis(500)).await;
-							} else {
-								skip_page = false;
-								on_next_page(cursor.clone(), page.next_cursor.unwrap());
-								cursor = page.next_cursor;
-							}
-						},
-						Err(err) => {
-							warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retry_count);
-							retry_count += 1;
-							tokio::time::sleep(Duration::from_millis(500)).await;
+				checkpoints.clear();
+				for block in page.data {
+					// if we found a new (to this iteration) checkpoint, we want to let the checkpoints-based
+					// processor know immediately
+					// we also skip those items here, so we don't need to coordinate with it
+					if let Some(cp) = block.checkpoint && checkpoints.insert(cp) {
+						observed_checkpoints_tx.send(cp).ok();
+						continue;
+					}
+					let Some(changes) = block.object_changes else { continue };
+					for (id, version, deletion) in changes.into_iter().filter_map(parse_change) {
+						if tx
+							.send(ObjectItem { cp: 0, deletion, id, version, bytes: Default::default() })
+							.await
+							.is_err()
+						{
+							// channel closed, stop processing
+							return
 						}
 					}
 				}
-				_ = &mut rx_term => break
+			}
+			Err(err) => {
+				let timeout_ms = 100;
+				warn!(error = ?err, "error polling tx blocks; retry #{} after {}ms timeout", retry_count, timeout_ms);
+				retry_count += 1;
+				tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
 			}
 		}
-	})
+	}
 }
 
 #[derive(Debug)]
@@ -615,9 +651,9 @@ fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(V
 	return None
 }
 
-pub async fn transform<'a, S: Stream<Item = ObjectItem> + 'a>(
+async fn transform<'a, S: Stream<Item = ObjectItem> + 'a>(
 	stream: S,
-	mut sui: ClientPool,
+	sui: ClientPool,
 ) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
 	// batch incoming items so we can amortize the cost of sui api calls,
 	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their
@@ -691,13 +727,12 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 	}
 }
 
-pub async fn load<'a, S: Stream<Item = ObjectItem> + 'a>(
+async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 	cfg: AppConfig,
 	stream: S,
 	db: Database,
 	last_tx: TSender<(StepStatus, ObjectItem)>,
 ) {
-	let stream = stream.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
 	// e.g. prod_testnet_objects
 	let collection = mongo_collection_name(&cfg, "");
 

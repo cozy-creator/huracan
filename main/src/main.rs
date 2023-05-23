@@ -5,24 +5,19 @@
 #[macro_use]
 extern crate serde;
 
-use async_stream::stream;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use conf::AppConfig;
 use dotenv::dotenv;
-use mongodb::{
-	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
-	Client,
-};
 use pulsar::{
 	authentication::oauth2::{OAuth2Authentication, OAuth2Params},
 	Pulsar, TokioExecutor,
 };
-use sui_types::digests::TransactionDigest;
-use tokio::pin;
 use tracing_subscriber::filter::EnvFilter;
 
 use crate::{
 	_prelude::*,
-	etl::{fullscan, ClientPool, StepStatus},
+	etl::{start, ClientPool},
 };
 
 mod _prelude;
@@ -63,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 		.build()
 		.await?;
 
-	fullscan(&cfg, sui, pulsar, rx_term).await.unwrap();
+	start(&cfg, sui, pulsar, rx_term).await.unwrap();
 
 	// let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
 	// let items = etl::extract(sui.clone(), rx_term, start_from, {
@@ -163,4 +158,16 @@ fn setup_ctrl_c_listener() -> tokio::sync::oneshot::Receiver<()> {
 		let _ = tx_sig_term.send(());
 	});
 	rx_sig_term
+}
+
+pub fn ctrl_c_bool() -> Arc<AtomicBool> {
+	let stop = Arc::new(AtomicBool::new(false));
+	tokio::spawn({
+		let stop = stop.clone();
+		async move {
+			tokio::signal::ctrl_c().await.unwrap();
+			stop.store(true, Ordering::Relaxed);
+		}
+	});
+	stop
 }
