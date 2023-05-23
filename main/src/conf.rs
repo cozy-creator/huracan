@@ -93,10 +93,8 @@ pub struct RpcProviderConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiConfig {
-	pub testnet:             Vec<RpcProviderConfig>,
-	pub mainnet:             Vec<RpcProviderConfig>,
-	pub step1retries:        usize,
-	pub step1retrytimeoutms: u64,
+	pub testnet: Vec<RpcProviderConfig>,
+	pub mainnet: Vec<RpcProviderConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
