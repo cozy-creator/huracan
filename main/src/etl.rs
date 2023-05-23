@@ -642,6 +642,7 @@ fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(V
 		return None
 	}
 	if let Some(obj) = res.data {
+		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
 		let mut bytes = Vec::with_capacity(4096);
 		let bson = bson::to_bson(&obj).unwrap();
 		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
