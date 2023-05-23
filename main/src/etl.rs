@@ -514,13 +514,7 @@ async fn fullscan_extract(
 	}
 }
 
-// poll for latest transaction blocks until either:
-// we hit a tx that we've already processed -- can store in memory and just re-poll on restart
-// we hit a tx that's part of the latest checkpoint we've already completed
-
-// polling:
-// configured poll_interval, e.g. 50ms
-// use first configured rpc source, assuming that's our lowest-latency one
+// TODO use first configured rpc source instead of RR, assuming that's our lowest-latency one
 pub async fn poll(
 	mut sui: ClientPool,
 	stop: Arc<AtomicBool>,
