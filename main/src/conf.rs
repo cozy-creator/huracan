@@ -119,6 +119,14 @@ impl AppConfig {
 			Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?;
 		config.throughput.name = "throughput".into();
 		config.lowlatency.name = "lowlatency".into();
+
+		// FIXME validate that the directory is either empty, doesn't exist or contains ONLY rocksDB data files
+		//			this is because we automatically remove the dir at runtime without further checks
+		//			so if you've misconfigured this
+		if config.rocksdbfile == "" || config.rocksdbfile == "/" {
+			panic!("please set config.rocksdbfile to a new or empty or existing RocksDB data dir; it can and will be deleted at runtime, as needed!");
+		}
+
 		Ok(config)
 	}
 }
