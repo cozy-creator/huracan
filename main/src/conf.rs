@@ -12,6 +12,8 @@ use crate::_prelude::*;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PipelineConfig {
+	#[serde(default)]
+	pub name:                String,
 	pub queuebuffers:        QueueBuffersConfig,
 	pub workers:             WorkersConfig,
 	pub mongo:               MongoPipelineStepConfig,
@@ -113,7 +115,11 @@ pub struct AppConfig {
 
 impl AppConfig {
 	pub fn new() -> anyhow::Result<Self> {
-		Ok(Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?)
+		let mut config: AppConfig =
+			Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?;
+		config.throughput.name = "throughput".into();
+		config.lowlatency.name = "lowlatency".into();
+		Ok(config)
 	}
 }
 
