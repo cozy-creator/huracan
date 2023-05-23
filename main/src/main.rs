@@ -33,7 +33,6 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	let rx_term = setup_ctrl_c_listener();
 	let sui = {
 		let providers = if cfg.net == "testnet" {
 			&cfg.sui.testnet
@@ -58,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
 		.build()
 		.await?;
 
-	start(&cfg, sui, pulsar, rx_term).await.unwrap();
+	start(&cfg, sui, pulsar).await.unwrap();
 
 	// let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
 	// let items = etl::extract(sui.clone(), rx_term, start_from, {
