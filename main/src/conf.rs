@@ -2,6 +2,10 @@ use figment::{
 	providers::{Env, Format, Yaml},
 	Figment,
 };
+use mongodb::{
+	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
+	Database,
+};
 
 use crate::_prelude::*;
 
@@ -32,6 +36,17 @@ pub struct MongoConfig {
 	pub batchwaittimeoutms: u64,
 	pub retries:            usize,
 	pub zstdlevel:          i32,
+}
+
+impl MongoConfig {
+	pub async fn client(&self) -> anyhow::Result<Database> {
+		let mut client_options = ClientOptions::parse(&self.uri).await?;
+		// use zstd compression for messages
+		client_options.compressors = Some(vec![Compressor::Zstd { level: Some(self.zstdlevel) }]);
+		client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+		let client = mongodb::Client::with_options(client_options)?;
+		Ok(client.database(&self.db))
+	}
 }
 
 #[derive(Clone, Debug, Deserialize)]

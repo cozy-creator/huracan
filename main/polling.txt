@@ -1,0 +1,15 @@
+in case ascending polling from latest already-processed tx id should not work,
+e.g. due to perhaps tx order not being fixed (before + after finalizing), here are some notes on how to work with
+polling in a desc direction then:
+
+// adjust item limit dynamically...
+// 25-50% redundant tx pages fetching is probably fine?
+// should aim for fetching all relevant tx & changes in 95% of calls? 99%?
+// estimate tx/s
+// based on last 60s of txs? plus "spikiness" aka p95/p99 max
+// increase query limit 10x more readily than decrease it?
+// if didn't get all new tx + the last known one, launch a poll-based catch-up future with higher query limit
+//	qlimit can be based on estimate tx/s, but higher "safety multiplier" since we want to mitigate further delay
+
+we'd also need to keep track of all tx ids we've seen, collect them into a "checkpoint-cache", then on cp completion
+flush all tx ids from the cache that we know are part of that cp
