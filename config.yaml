@@ -2,28 +2,49 @@ env: dev
 net: testnet
 rocksdbfile: ./fullscan.tmp.db
 
-queuebuffers:
-  # 1024 * 1024
-  step1out: 1048576
-  cpcontrolfactor: 2
-  mongoinfactor: 10
-  last: 1024
-
-workers:
-  # these worker counts assume just a single but powerful rpc provider like suiscan being used
-  step1: 2
-  step2: 3
+throughput:
+  queuebuffers:
+    # 1024 * 1024
+    step1out: 1048576
+    cpcontrolfactor: 2
+    mongoinfactor: 10
+    last: 1024
+  workers:
+    # these worker counts assume just a single but powerful rpc provider like suiscan being used
+    step1: 2
+    step2: 3
+    mongo:
   mongo:
+    batchsize: 10000
+    batchwaittimeoutms: 1000
+    retries: 2
+    zstdlevel: 5
+  step1retries: 3
+  step1retrytimeoutms: 500
+
+lowlatency:
+  queuebuffers:
+    step1out: 2048
+    cpcontrolfactor: 2
+    mongoinfactor: 1
+    last: 256
+  workers:
+    step1: 1
+    step2: 4
+    mongo: 4
+  mongo:
+    batchsize: 64
+    batchwaittimeoutms: 10
+    retries: 3
+    zstdlevel: 1
+  step1retries: 3
+  step1retrytimeoutms: 10
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
   #uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net
   db: sui
   collectionbase: objects
-  batchsize: 1024
-  batchwaittimeoutms: 100
-  retries: 2
-  zstdlevel: 1
 
 pulsar:
   url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
@@ -48,8 +69,6 @@ sui:
     - url: https://rpc-mainnet.suiscan.xyz:443
       name: suiscan
       objectsquerylimit: 50
-  step1retries: 3
-  step1retrytimeoutms: 500
 
 log:
   # fancy some colors? - disable if redirect to file is intended

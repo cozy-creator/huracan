@@ -39,7 +39,7 @@ use tokio::{
 
 use crate::{
 	_prelude::*,
-	conf::{AppConfig, RpcProviderConfig},
+	conf::{AppConfig, PipelineConfig, RpcProviderConfig},
 	ctrl_c_bool,
 	utils::make_descending_ranges,
 };
@@ -209,22 +209,26 @@ pub async fn start(
 #[allow(unused)]
 async fn scan(
 	cfg: &AppConfig,
+	pc: &PipelineConfig,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
 	rx_term: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
+	//
 	let db = Arc::new(DBWithThreadMode::<SingleThreaded>::open_default(&cfg.rocksdbfile).unwrap());
 
-	let mongo = cfg.mongo.client().await?;
+	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
+	//
 	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
 
 	let default_num_workers = sui.configs.len();
-	let num_step1_workers = cfg.workers.step1.unwrap_or(default_num_workers);
-	let num_step2_workers = cfg.workers.step2.unwrap_or(default_num_workers);
-	let num_mongo_workers = cfg.workers.mongo.unwrap_or(num_step1_workers);
+	let num_step1_workers = pc.workers.step1.unwrap_or(default_num_workers);
+	let num_step2_workers = pc.workers.step2.unwrap_or(default_num_workers);
+	let num_mongo_workers = pc.workers.mongo.unwrap_or(num_step1_workers);
 	info!("workers: step1: {}; step2: {}; mongo: {}", num_step1_workers, num_step2_workers, num_mongo_workers);
 
+	//
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
 		#[derive(Serialize, Deserialize)]
@@ -238,16 +242,16 @@ async fn scan(
 	};
 
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
-	let (object_ids_tx, object_ids_rx) = async_channel::bounded(cfg.queuebuffers.step1out);
+	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
 	// for the control channel, we want to add some blocking behavior in case the task acting
 	// on the control messages falls too far behind -- we don't want to process major portions of the
 	// chain without also storing info about our progress so we can resume about where we left off
 	let (cp_control_tx, mut cp_control_rx) =
-		tokio::sync::mpsc::channel(num_step1_workers * cfg.queuebuffers.cpcontrolfactor);
+		tokio::sync::mpsc::channel(num_step1_workers * pc.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mongo_rx) =
-		async_channel::bounded(cfg.mongo.batchsize * cfg.queuebuffers.mongoinfactor * num_mongo_workers);
-	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(cfg.queuebuffers.last);
+		async_channel::bounded(pc.mongo.batchsize * pc.queuebuffers.mongoinfactor * num_mongo_workers);
+	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(pc.queuebuffers.last);
 
 	// handle stopping gracefully
 	let stop = Arc::new(AtomicBool::new(false));
@@ -264,8 +268,9 @@ async fn scan(
 	{
 		let step_size = num_step1_workers;
 		for partition in 0..num_step1_workers {
+			//
 			tokio::spawn(fullscan_extract(
-				cfg.clone(),
+				pc.clone(),
 				checkpoint_max,
 				completed_checkpoint_ranges.clone(),
 				step_size,
@@ -318,8 +323,8 @@ async fn scan(
 		for _ in 0..num_mongo_workers {
 			let mongo_rx = mongo_rx.clone();
 			let mongo_rx =
-				mongo_rx.chunks_timeout(cfg.mongo.batchsize, Duration::from_millis(cfg.mongo.batchwaittimeoutms));
-			tokio::spawn(load_batched(cfg.clone(), mongo_rx, mongo.clone(), last_tx.clone()));
+				mongo_rx.chunks_timeout(pc.mongo.batchsize, Duration::from_millis(pc.mongo.batchwaittimeoutms));
+			tokio::spawn(load_batched(cfg.clone(), pc.clone(), mongo_rx, mongo.clone(), last_tx.clone()));
 		}
 		drop(mongo_rx);
 		drop(last_tx);
@@ -337,14 +342,14 @@ async fn scan(
 				}
 				let v = completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64);
 				if *v == 0 {
-					mongo_checkpoint(&cfg, &mongo, cp).await;
+					mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
 			Some((cp, num_items)) = cp_control_rx.recv() => {
 				let v = completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64);
 				if *v == 0 {
-					mongo_checkpoint(&cfg, &mongo, cp).await;
+					mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
 					completions_left.remove(&cp);
 				}
 			},
@@ -370,8 +375,8 @@ fn mongo_collection_name(cfg: &AppConfig, suffix: &str) -> String {
 	format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
 }
 
-async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequenceNumber) {
-	let mut retries_left = cfg.mongo.retries;
+async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Database, cp: CheckpointSequenceNumber) {
+	let mut retries_left = pc.mongo.retries;
 	loop {
 		if let Err(err) = db
 			.run_command(
@@ -404,7 +409,7 @@ async fn mongo_checkpoint(cfg: &AppConfig, db: &Database, cp: CheckpointSequence
 }
 
 async fn fullscan_extract(
-	cfg: AppConfig,
+	pc: PipelineConfig,
 	checkpoint_max: u64,
 	completed_checkpoint_ranges: Vec<(u64, u64)>,
 	step_size: usize,
@@ -450,14 +455,14 @@ async fn fullscan_extract(
 			Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 		);
 		let mut cursor = None;
-		let mut retries_left = cfg.sui.step1retries;
+		let mut retries_left = pc.step1retries;
 		let mut num_objects = 0u32;
 
 		loop {
 			let page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
 			match page {
 				Ok(page) => {
-					retries_left = cfg.sui.step1retries;
+					retries_left = pc.step1retries;
 					for tx_block in page.data {
 						if let Some(changes) = tx_block.object_changes {
 							for change in changes {
@@ -507,7 +512,7 @@ async fn fullscan_extract(
 					}
 					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
-					tokio::time::sleep(Duration::from_millis(cfg.sui.step1retrytimeoutms)).await;
+					tokio::time::sleep(Duration::from_millis(pc.step1retrytimeoutms)).await;
 				}
 			}
 		}
@@ -724,6 +729,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 	cfg: AppConfig,
+	pc: PipelineConfig,
 	stream: S,
 	db: Database,
 	last_tx: TSender<(StepStatus, ObjectItem)>,
@@ -733,7 +739,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 	pin!(stream);
 	while let Some(chunk) = stream.next().await {
-		let mut retries_left = cfg.mongo.retries;
+		let mut retries_left = pc.mongo.retries;
 		loop {
 			// for now mongo's rust driver doesn't offer a way to directly do bulk updates / batching
 			// there's a high-level API only for inserting many, but not for updating or deleting many,
