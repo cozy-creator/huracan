@@ -1,3 +1,4 @@
+/// ranges are inclusive on both sides
 pub fn make_descending_ranges(mut numbers: Vec<u64>) -> Vec<(u64, u64)> {
 	if numbers.is_empty() {
 		return Vec::new()
