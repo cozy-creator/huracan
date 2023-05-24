@@ -7,7 +7,7 @@ use mongodb::{
 	Database,
 };
 
-use crate::_prelude::*;
+use crate::{_prelude::*, client::ClientPool};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +128,20 @@ impl AppConfig {
 		}
 
 		Ok(config)
+	}
+
+	pub async fn sui(&self) -> anyhow::Result<ClientPool> {
+		let providers = if self.net == "testnet" {
+			&self.sui.testnet
+		} else if self.net == "mainnet" {
+			&self.sui.mainnet
+		} else {
+			panic!("unknown net configuration: {} (expected: mainnet | testnet)", self.net);
+		};
+		if providers.is_empty() {
+			panic!("no RPC providers configured for {}!", self.net);
+		}
+		Ok(ClientPool::new(providers.clone()).await?)
 	}
 }
 

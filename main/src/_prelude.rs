@@ -15,3 +15,5 @@ pub use macros::PulsarMessage;
 pub use serde::{de, Deserialize, Deserializer};
 pub use tokio::time::{self, timeout, Duration, Instant};
 pub use tracing::{debug, error, event, info, trace, warn, Level};
+
+pub use crate::conf::{AppConfig, PipelineConfig};

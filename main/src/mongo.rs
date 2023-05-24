@@ -1,9 +1,8 @@
 use bson::doc;
 use mongodb::Database;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
-use tracing::{error, warn};
 
-use crate::conf::{AppConfig, PipelineConfig};
+use crate::_prelude::*;
 
 #[derive(Serialize, Deserialize)]
 pub struct Checkpoint {
