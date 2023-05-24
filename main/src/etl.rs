@@ -15,12 +15,11 @@ use mongodb::{options::FindOneOptions, Database};
 use pulsar::{Producer, Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::rpc_types::{
-	ObjectChange as SuiObjectChange, SuiObjectDataOptions, SuiObjectResponse, SuiTransactionBlockResponseOptions,
+	ObjectChange as SuiObjectChange, SuiObjectDataOptions, SuiTransactionBlockResponseOptions,
 	SuiTransactionBlockResponseQuery,
 };
 use sui_types::{
-	base_types::{ObjectID, SequenceNumber, VersionNumber},
-	error::SuiObjectResponseError,
+	base_types::{ObjectID, SequenceNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 	query::TransactionFilter,
 };
@@ -32,7 +31,7 @@ use tokio::{
 
 use crate::{
 	_prelude::*,
-	client::ClientPool,
+	client::{parse_get_object_response, ClientPool},
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool,
 	utils::make_descending_ranges,
@@ -579,36 +578,6 @@ impl Display for StepStatus {
 			Self::Err => f.write_str("Err"),
 		}
 	}
-}
-
-fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
-	if let Some(err) = res.error {
-		use SuiObjectResponseError::*;
-		match err {
-			Deleted { object_id, version, digest: _ } => {
-				warn!(object_id = ?object_id, version = ?version, "object not available: object has been deleted");
-			}
-			NotExists { object_id } => {
-				warn!(object_id = ?object_id, "object not available: object doesn't exist");
-			}
-			Unknown => {
-				warn!(object_id = ?id, "object not available: unknown error");
-			}
-			DisplayError { error } => {
-				warn!(object_id = ?id, "object not available: display error: {}", error);
-			}
-		};
-		return None
-	}
-	if let Some(obj) = res.data {
-		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
-		let mut bytes = Vec::with_capacity(4096);
-		let bson = bson::to_bson(&obj).unwrap();
-		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
-		return Some((obj.version, bytes))
-	}
-	warn!(object_id = ?id, "neither .data nor .error was set in get_object response!");
-	return None
 }
 
 async fn transform<'a, S: Stream<Item = ObjectItem> + 'a>(
