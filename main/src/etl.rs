@@ -31,7 +31,8 @@ use crate::{
 	client,
 	client::{parse_get_object_response, ClientPool},
 	conf::{AppConfig, PipelineConfig},
-	ctrl_c_bool,
+	ctrl_c_bool, mongo,
+	mongo::{mongo_checkpoint, Checkpoint},
 	utils::make_descending_ranges,
 };
 
@@ -79,7 +80,7 @@ pub async fn start(cfg: &AppConfig, mut sui: ClientPool, pulsar: Pulsar<TokioExe
 
 		async move {
 			let mongo = cfg.mongo.client(&cfg.lowlatency.mongo).await.unwrap();
-			let coll = mongo.collection::<Checkpoint>(&mongo_collection_name(&cfg, "_checkpoints"));
+			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
 			let mut last_microscan_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
@@ -142,12 +143,6 @@ async fn spawn_scan() {}
 
 async fn spawn_poll() {}
 
-#[derive(Serialize, Deserialize)]
-struct Checkpoint {
-	// TODO mongo u64 issue
-	_id: u64,
-}
-
 #[allow(unused)]
 async fn spawn_fullscan_pipeline(
 	cfg: &AppConfig,
@@ -178,7 +173,7 @@ async fn spawn_fullscan_pipeline(
 	//
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
-		let coll = mongo.collection::<Checkpoint>(&mongo_collection_name(&cfg, "_checkpoints"));
+		let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap()._id).collect::<Vec<_>>().await;
 		make_descending_ranges(cpids)
 	};
@@ -315,43 +310,6 @@ async fn make_producer(cfg: &AppConfig, pulsar: &Pulsar<TokioExecutor>, ty: &str
 		.with_topic(&format!("{}{}_{}_{}_{}", cfg.pulsar.topicbase, cfg.env, cfg.net, cfg.mongo.collectionbase, ty))
 		.build()
 		.await?)
-}
-
-fn mongo_collection_name(cfg: &AppConfig, suffix: &str) -> String {
-	format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
-}
-
-async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Database, cp: CheckpointSequenceNumber) {
-	let mut retries_left = pc.mongo.retries;
-	loop {
-		if let Err(err) = db
-			.run_command(
-				doc! {
-					// e.g. prod_testnet_objects_checkpoints
-					"update": mongo_collection_name(&cfg, "_checkpoints"),
-					"updates": vec![
-						doc! {
-							// FIXME how do we store a u64 in mongo? this will be an issue when the chain
-							//		 has been running for long enough!
-							"q": doc! { "_id": cp as i64 },
-							"u": doc! { "_id": cp as i64 },
-							"upsert": true,
-						}
-					]
-				},
-				None,
-			)
-			.await
-		{
-			warn!("failed saving checkpoint to mongo: {}", err);
-			if retries_left > 0 {
-				retries_left -= 1;
-				continue
-			}
-			error!(error = ?err, "checkpoint {} fully completed, but could not save checkpoint status to mongo!", cp);
-		}
-		break
-	}
 }
 
 async fn do_scan(
@@ -653,7 +611,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 	last_tx: TSender<(StepStatus, ObjectItem)>,
 ) {
 	// e.g. prod_testnet_objects
-	let collection = mongo_collection_name(&cfg, "");
+	let collection = mongo::mongo_collection_name(&cfg, "");
 
 	pin!(stream);
 	while let Some(chunk) = stream.next().await {

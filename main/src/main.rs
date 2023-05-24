@@ -22,6 +22,7 @@ mod _prelude;
 mod client;
 mod conf;
 mod etl;
+mod mongo;
 mod utils;
 
 #[tokio::main]
