@@ -6,7 +6,7 @@ throughput:
   queuebuffers:
     # 1024 * 1024
     step1out: 1048576
-    cpcontrolfactor: 2
+    cpcompletions: 128
     mongoinfactor: 10
     last: 1024
   workers:
@@ -28,7 +28,10 @@ throughput:
 lowlatency:
   queuebuffers:
     step1out: 2048
-    cpcontrolfactor: 2
+    # on the ll queue we'd rather fall behind in saving checkpoint completions than
+    # cause stalling on any of the previous steps, as here we really only care about getting stuff into mongo
+    # with as little delay as possible
+    cpcompletions: 2048
     mongoinfactor: 1
     last: 256
   workers:

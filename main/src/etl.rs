@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
-use async_channel::Sender as ACSender;
+use async_channel::{Receiver as ACReceiver, Sender as ACSender};
 use async_stream::stream;
 use bson::{doc, Document};
 use futures::Stream;
@@ -22,7 +22,7 @@ use sui_types::{
 };
 use tokio::{
 	pin,
-	sync::mpsc::{Sender as TSender, UnboundedSender},
+	sync::mpsc::{Sender as TSender, UnboundedReceiver, UnboundedSender},
 	task::JoinHandle,
 };
 
@@ -72,13 +72,11 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 	let pause = Arc::new(AtomicU16::new(0));
 	// poll for latest txs
 	// (low-latency focus)
-	spawn_poll().await;
-	let (observed_checkpoints_tx, _observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
-	let (poll_tx, _poll_rx) = tokio::sync::mpsc::channel(cfg.lowlatency.queuebuffers.step1out);
-	tokio::spawn(do_poll(sui.clone(), stop.clone(), pause.clone(), observed_checkpoints_tx, poll_tx));
+	let (poll_items, poll_observed_cps) = spawn_poll(cfg, &mut sui, &stop, &pause).await;
 
 	// rest of the low-latency pipeline
-	spawn_pipeline_tail().await;
+	let (ll_cp_control_tx, ll_handle) =
+		spawn_pipeline_tail(cfg, &cfg.lowlatency, sui.clone(), pulsar.clone(), poll_items).await?;
 
 	// observe checkpoints flow:
 	// if we fell behind too far, we focus on throughput until caught up:
@@ -87,6 +85,7 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 	tokio::spawn({
 		let stop = stop.clone();
 		let pause = pause.clone();
+		let cfg = cfg.clone();
 
 		// load latest completed checkpoint
 		// if this is too far back
@@ -122,7 +121,7 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 					// ask low-latency work to pause
 					pause.store(250, Relaxed);
 					// run fullscan
-					let (handle, step1completed_rx) =
+					let (step1completed_rx, handle) =
 						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone()).await.unwrap();
 					// continue low-latency work as soon as step 1 of the fullscan completes,
 					// so we incur as little unnecessary latency as possible while just waiting for
@@ -144,7 +143,7 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 					continue
 				}
 
-				spawn_scan(latest_cp, last_microscan_cp);
+				spawn_scan(latest_cp, last_microscan_cp).await;
 
 				// tokio::select! {}
 			}
@@ -154,85 +153,35 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 	Ok(())
 }
 
-async fn spawn_pipeline_tail() {}
+async fn spawn_poll(
+	cfg: &AppConfig,
+	sui: &ClientPool,
+	stop: &Arc<AtomicBool>,
+	pause: &Arc<AtomicU16>,
+) -> (ACReceiver<ObjectItem>, UnboundedReceiver<CheckpointSequenceNumber>) {
+	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
+	let (poll_tx, poll_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
+	tokio::spawn(do_poll(sui.clone(), stop.clone(), pause.clone(), observed_checkpoints_tx, poll_tx));
+	(poll_rx, observed_checkpoints_rx)
+}
 
-async fn spawn_scan() {}
-
-async fn spawn_poll() {}
-
-#[allow(unused)]
-async fn spawn_fullscan_pipeline(
+async fn spawn_pipeline_tail(
 	cfg: &AppConfig,
 	pc: &PipelineConfig,
-	mut sui: ClientPool,
+	sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
-) -> Result<(JoinHandle<u64>, tokio::sync::oneshot::Receiver<()>)> {
-	let db = {
-		// give each pipeline its own rocksdb instance
-		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);
-		// this is a new run, so we remove any previous rocksdb data to avoid skipping newer objects
-		// incorrectly, because we're re-scanning from newer txs than where we started last time
-		std::fs::remove_dir_all(&rocksdbfile).ok();
-		Arc::new(DBWithThreadMode::<SingleThreaded>::open_default(&rocksdbfile).unwrap())
-	};
-
+	object_ids_rx: ACReceiver<ObjectItem>,
+) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
-	//
-	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
-
 	let default_num_workers = sui.configs.len();
-	let num_step1_workers = pc.workers.step1.unwrap_or(default_num_workers);
 	let num_step2_workers = pc.workers.step2.unwrap_or(default_num_workers);
-	let num_mongo_workers = pc.workers.mongo.unwrap_or(num_step1_workers);
-	info!("workers: step1: {}; step2: {}; mongo: {}", num_step1_workers, num_step2_workers, num_mongo_workers);
+	let num_mongo_workers = pc.workers.mongo.unwrap_or(default_num_workers);
+	info!("workers: step2: {}; mongo: {}", num_step2_workers, num_mongo_workers);
 
-	//
-	// fetch already completed checkpoints
-	let completed_checkpoint_ranges = {
-		let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
-		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap()._id).collect::<Vec<_>>().await;
-		make_descending_ranges(cpids)
-	};
-
-	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
-	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
-	// for the control channel, we want to add some blocking behavior in case the task acting
-	// on the control messages falls too far behind -- we don't want to process major portions of the
-	// chain without also storing info about our progress so we can resume about where we left off
-	let (cp_control_tx, mut cp_control_rx) =
-		tokio::sync::mpsc::channel(num_step1_workers * pc.queuebuffers.cpcontrolfactor);
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mongo_rx) =
 		async_channel::bounded(pc.mongo.batchsize * pc.queuebuffers.mongoinfactor * num_mongo_workers);
-	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(pc.queuebuffers.last);
-
-	// spawn as many step 1 workers as we have RPC server urls,
-	// let each worker freely balance requests between them
-	let (step1finished_tx, step1finished_rx) = tokio::sync::oneshot::channel();
-	{
-		let step_size = num_step1_workers;
-		let mut handles = Vec::with_capacity(num_step1_workers);
-		for partition in 0..num_step1_workers {
-			handles.push(tokio::spawn(do_scan(
-				pc.clone(),
-				checkpoint_max,
-				completed_checkpoint_ranges.clone(),
-				step_size,
-				partition,
-				sui.clone(),
-				db.clone(),
-				object_ids_tx.clone(),
-				cp_control_tx.clone(),
-			)));
-		}
-		drop(object_ids_tx);
-		drop(cp_control_tx);
-		tokio::spawn(async move {
-			futures::future::join_all(handles).await;
-			step1finished_tx.send(()).ok();
-		});
-	}
 
 	// step 2 workers
 	{
@@ -240,13 +189,14 @@ async fn spawn_fullscan_pipeline(
 			tokio::spawn({
 				let sui = sui.clone();
 				let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await?;
-				let object_ids_rx = object_ids_rx.clone().chunks_timeout(
-					pc.objectqueries.batchsize,
-					Duration::from_millis(pc.objectqueries.batchwaittimeoutms),
-				);
+				let batch_size = pc.objectqueries.batchsize;
+				let batch_wait_timeout = pc.objectqueries.batchwaittimeoutms;
+				let object_ids_rx = object_ids_rx.clone();
 				let mongo_tx = mongo_tx.clone();
 
 				async move {
+					let object_ids_rx =
+						object_ids_rx.chunks_timeout(batch_size, Duration::from_millis(batch_wait_timeout));
 					let stream = transform_batched(object_ids_rx, sui).await;
 					let stream = stream! {
 						for await (status, item) in stream {
@@ -269,6 +219,8 @@ async fn spawn_fullscan_pipeline(
 		drop(mongo_tx);
 	}
 
+	let (last_tx, mut last_rx) = tokio::sync::mpsc::channel(pc.queuebuffers.last);
+
 	// step 3: mongo workers
 	{
 		for _ in 0..num_mongo_workers {
@@ -280,6 +232,11 @@ async fn spawn_fullscan_pipeline(
 		drop(mongo_rx);
 		drop(last_tx);
 	}
+
+	// for the control channel, we want to add some blocking behavior in case the task acting
+	// on the control messages falls too far behind -- we don't want to process major portions of the
+	// chain without also storing info about our progress so we can resume about where we left off
+	let (cp_control_tx, mut cp_control_rx) = tokio::sync::mpsc::channel(pc.queuebuffers.cpcompletions);
 
 	let handle = tokio::spawn({
 		let cfg = cfg.clone();
@@ -319,7 +276,75 @@ async fn spawn_fullscan_pipeline(
 		}
 	});
 
-	Ok((handle, step1finished_rx))
+	Ok((cp_control_tx, handle))
+}
+
+async fn spawn_scan(_: u64, _: u64) {}
+
+#[allow(unused)]
+async fn spawn_fullscan_pipeline(
+	cfg: &AppConfig,
+	pc: &PipelineConfig,
+	mut sui: ClientPool,
+	pulsar: Pulsar<TokioExecutor>,
+) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
+	let db = {
+		// give each pipeline its own rocksdb instance
+		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);
+		// this is a new run, so we remove any previous rocksdb data to avoid skipping newer objects
+		// incorrectly, because we're re-scanning from newer txs than where we started last time
+		std::fs::remove_dir_all(&rocksdbfile).ok();
+		Arc::new(DBWithThreadMode::<SingleThreaded>::open_default(&rocksdbfile).unwrap())
+	};
+
+	let mongo = cfg.mongo.client(&pc.mongo).await?;
+
+	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+
+	let default_num_workers = sui.configs.len();
+	let num_step1_workers = pc.workers.step1.unwrap_or(default_num_workers);
+	info!("workers: step1: {}", num_step1_workers);
+
+	// fetch already completed checkpoints
+	let completed_checkpoint_ranges = {
+		let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
+		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap()._id).collect::<Vec<_>>().await;
+		make_descending_ranges(cpids)
+	};
+
+	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
+	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
+
+	let (cp_control_tx, handle) = spawn_pipeline_tail(cfg, pc, sui.clone(), pulsar, object_ids_rx).await?;
+
+	// spawn as many step 1 workers as we have RPC server urls,
+	// let each worker freely balance requests between them
+	let (step1finished_tx, step1finished_rx) = tokio::sync::oneshot::channel();
+	{
+		let step_size = num_step1_workers;
+		let mut handles = Vec::with_capacity(num_step1_workers);
+		for partition in 0..num_step1_workers {
+			handles.push(tokio::spawn(do_scan(
+				pc.clone(),
+				checkpoint_max,
+				completed_checkpoint_ranges.clone(),
+				step_size,
+				partition,
+				sui.clone(),
+				db.clone(),
+				object_ids_tx.clone(),
+				cp_control_tx.clone(),
+			)));
+		}
+		drop(object_ids_tx);
+		drop(cp_control_tx);
+		tokio::spawn(async move {
+			futures::future::join_all(handles).await;
+			step1finished_tx.send(()).ok();
+		});
+	}
+
+	Ok((step1finished_rx, handle))
 }
 
 async fn do_scan(
@@ -439,7 +464,7 @@ async fn do_poll(
 	stop: Arc<AtomicBool>,
 	pause: Arc<AtomicU16>,
 	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
-	tx: tokio::sync::mpsc::Sender<ObjectItem>,
+	tx: ACSender<ObjectItem>,
 ) {
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
