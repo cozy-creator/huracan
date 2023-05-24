@@ -7,6 +7,7 @@ extern crate serde;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use client::ClientPool;
 use conf::AppConfig;
 use dotenv::dotenv;
 use pulsar::{
@@ -15,12 +16,10 @@ use pulsar::{
 };
 use tracing_subscriber::filter::EnvFilter;
 
-use crate::{
-	_prelude::*,
-	etl::{start, ClientPool},
-};
+use crate::{_prelude::*, etl::start};
 
 mod _prelude;
+mod client;
 mod conf;
 mod etl;
 mod utils;
