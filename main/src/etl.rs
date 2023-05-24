@@ -14,10 +14,7 @@ use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::{options::FindOneOptions, Database};
 use pulsar::{Producer, Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
-use sui_sdk::rpc_types::{
-	ObjectChange as SuiObjectChange, SuiObjectDataOptions, SuiTransactionBlockResponseOptions,
-	SuiTransactionBlockResponseQuery,
-};
+use sui_sdk::rpc_types::{SuiObjectDataOptions, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery};
 use sui_types::{
 	base_types::{ObjectID, SequenceNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
@@ -31,6 +28,7 @@ use tokio::{
 
 use crate::{
 	_prelude::*,
+	client,
 	client::{parse_get_object_response, ClientPool},
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool,
@@ -48,15 +46,6 @@ pub struct ObjectItem {
 	pub id:       ObjectID,
 	pub version:  SequenceNumber,
 	pub bytes:    Vec<u8>,
-}
-
-fn parse_change(change: SuiObjectChange) -> Option<(ObjectID, SequenceNumber, bool)> {
-	use SuiObjectChange::*;
-	Some(match change {
-		Created { object_id, version, .. } | Mutated { object_id, version, .. } => (object_id, version, false),
-		Deleted { object_id, version, .. } => (object_id, version, true),
-		_ => return None,
-	})
 }
 
 pub async fn start(cfg: &AppConfig, mut sui: ClientPool, pulsar: Pulsar<TokioExecutor>) -> Result<()> {
@@ -423,7 +412,7 @@ async fn do_scan(
 					for tx_block in page.data {
 						if let Some(changes) = tx_block.object_changes {
 							for change in changes {
-								let Some((object_id, version, deleted)) = parse_change(change) else {
+								let Some((object_id, version, deleted)) = client::parse_change(change) else {
 									continue;
 								};
 								let k = object_id.as_slice();
@@ -543,7 +532,7 @@ async fn do_poll(
 						continue;
 					}
 					let Some(changes) = block.object_changes else { continue };
-					for (id, version, deletion) in changes.into_iter().filter_map(parse_change) {
+					for (id, version, deletion) in changes.into_iter().filter_map(client::parse_change) {
 						if tx
 							.send(ObjectItem { cp: 0, deletion, id, version, bytes: Default::default() })
 							.await
