@@ -49,6 +49,21 @@ pub struct ObjectItem {
 	pub bytes:    Vec<u8>,
 }
 
+#[derive(Debug)]
+pub enum StepStatus {
+	Ok,
+	Err,
+}
+
+impl Display for StepStatus {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Ok => f.write_str("Ok"),
+			Self::Err => f.write_str("Err"),
+		}
+	}
+}
+
 pub async fn start(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
@@ -500,21 +515,6 @@ async fn do_poll(
 				retry_count += 1;
 				tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
 			}
-		}
-	}
-}
-
-#[derive(Debug)]
-pub enum StepStatus {
-	Ok,
-	Err,
-}
-
-impl Display for StepStatus {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Ok => f.write_str("Ok"),
-			Self::Err => f.write_str("Err"),
 		}
 	}
 }
