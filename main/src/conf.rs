@@ -16,9 +16,17 @@ pub struct PipelineConfig {
 	pub name:                String,
 	pub queuebuffers:        QueueBuffersConfig,
 	pub workers:             WorkersConfig,
+	pub objectqueries:       ObjectQueriesConfig,
 	pub mongo:               MongoPipelineStepConfig,
 	pub step1retries:        usize,
 	pub step1retrytimeoutms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectQueriesConfig {
+	pub batchsize:          usize,
+	pub batchwaittimeoutms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
