@@ -5,8 +5,8 @@ use sui_sdk::{
 	apis::ReadApi,
 	error::SuiRpcResult,
 	rpc_types::{
-		SuiGetPastObjectRequest, SuiObjectDataOptions, SuiObjectResponse, SuiPastObjectResponse,
-		SuiTransactionBlockResponseQuery, TransactionBlocksPage,
+		ObjectChange as SuiObjectChange, SuiGetPastObjectRequest, SuiObjectDataOptions, SuiObjectResponse,
+		SuiPastObjectResponse, SuiTransactionBlockResponseQuery, TransactionBlocksPage,
 	},
 	SuiClient, SuiClientBuilder,
 };
@@ -141,4 +141,13 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 	}
 	warn!(object_id = ?id, "neither .data nor .error was set in get_object response!");
 	return None
+}
+
+pub fn parse_change(change: SuiObjectChange) -> Option<(ObjectID, SequenceNumber, bool)> {
+	use sui_sdk::rpc_types::ObjectChange::*;
+	Some(match change {
+		Created { object_id, version, .. } | Mutated { object_id, version, .. } => (object_id, version, false),
+		Deleted { object_id, version, .. } => (object_id, version, true),
+		_ => return None,
+	})
 }
