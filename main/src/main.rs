@@ -7,22 +7,17 @@ extern crate serde;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use client::ClientPool;
+use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
-use pulsar::{
-	authentication::oauth2::{OAuth2Authentication, OAuth2Params},
-	Pulsar, TokioExecutor,
-};
 use tracing_subscriber::filter::EnvFilter;
-
-use crate::{_prelude::*, etl::start};
 
 mod _prelude;
 mod client;
 mod conf;
 mod etl;
 mod mongo;
+mod pulsar;
 mod utils;
 
 #[tokio::main]
@@ -33,31 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	let sui = {
-		let providers = if cfg.net == "testnet" {
-			&cfg.sui.testnet
-		} else if cfg.net == "mainnet" {
-			&cfg.sui.mainnet
-		} else {
-			panic!("unknown net configuration: {} (expected: mainnet | testnet)", cfg.net);
-		};
-		if providers.is_empty() {
-			panic!("no RPC providers configured for {}!", cfg.net);
-		}
-		ClientPool::new(providers.clone()).await?
-	};
-
-	let pulsar = Pulsar::builder(&cfg.pulsar.url, TokioExecutor)
-		.with_auth_provider(OAuth2Authentication::client_credentials(OAuth2Params {
-			issuer_url:      cfg.pulsar.issuer.clone(),
-			credentials_url: format!("data:;base64,{}", cfg.pulsar.credentials),
-			audience:        Some(cfg.pulsar.audience.clone()),
-			scope:           None,
-		}))
-		.build()
-		.await?;
-
-	start(&cfg, sui, pulsar).await.unwrap();
+	etl::start(&cfg).await.unwrap();
 
 	// let start_from = aargs.start_from.or(cfg.extract.from).map(|s| TransactionDigest::from_str(&s).unwrap());
 	// let items = etl::extract(sui.clone(), rx_term, start_from, {

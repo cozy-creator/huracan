@@ -12,7 +12,7 @@ use bson::{doc, Document};
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::{options::FindOneOptions, Database};
-use pulsar::{Producer, Pulsar, TokioExecutor};
+use pulsar::{Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::rpc_types::{SuiObjectDataOptions, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery};
 use sui_types::{
@@ -49,7 +49,9 @@ pub struct ObjectItem {
 	pub bytes:    Vec<u8>,
 }
 
-pub async fn start(cfg: &AppConfig, mut sui: ClientPool, pulsar: Pulsar<TokioExecutor>) -> Result<()> {
+pub async fn start(cfg: &AppConfig) -> Result<()> {
+	let mut sui = cfg.sui().await?;
+	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
 
 	let pause = Arc::new(AtomicU16::new(0));
@@ -222,7 +224,7 @@ async fn spawn_fullscan_pipeline(
 		for _ in 0..num_step2_workers {
 			tokio::spawn({
 				let sui = sui.clone();
-				let mut retries = make_producer(&cfg, &pulsar, "retries").await?;
+				let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await?;
 				let object_ids_rx = object_ids_rx.clone();
 				let mongo_tx = mongo_tx.clone();
 
@@ -266,7 +268,7 @@ async fn spawn_fullscan_pipeline(
 		let pc = pc.clone();
 		async move {
 			// finally: check completions, issue retries
-			let mut retries = make_producer(&cfg, &pulsar, "retries").await.unwrap();
+			let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await.unwrap();
 			let mut completions_left = HashMap::new();
 			let mut max_cp_completed = 0u64;
 			loop {
@@ -300,16 +302,6 @@ async fn spawn_fullscan_pipeline(
 	});
 
 	Ok((handle, step1finished_rx))
-}
-
-async fn make_producer(cfg: &AppConfig, pulsar: &Pulsar<TokioExecutor>, ty: &str) -> Result<Producer<TokioExecutor>> {
-	Ok(pulsar
-		.producer()
-		// e.g. {persistent://public/default/}{prod}_{testnet}_{objects}_{retries}
-		// braces added for clarity of discerning between the different parts
-		.with_topic(&format!("{}{}_{}_{}_{}", cfg.pulsar.topicbase, cfg.env, cfg.net, cfg.mongo.collectionbase, ty))
-		.build()
-		.await?)
 }
 
 async fn do_scan(
