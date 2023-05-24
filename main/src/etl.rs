@@ -361,8 +361,9 @@ async fn do_scan(
 	let stop = ctrl_c_bool();
 	let mut completed_iter = completed_checkpoint_ranges.iter();
 	let mut completed_range = completed_iter.next();
+	let mut iter = (1..=checkpoint_max as usize - partition).rev().step_by(step_size).into_iter();
 	// walk partitioned checkpoints range from newest to oldest
-	'cp: for cp in (1..=checkpoint_max as usize - partition).rev().step_by(step_size) {
+	'cp: while let Some(cp) = iter.next() {
 		let cp = cp as u64;
 		// do we need to stop?
 		if stop.load(Relaxed) {
@@ -376,8 +377,17 @@ async fn do_scan(
 				if cp < *start {
 					// cp too low already, check next one
 					completed_range = completed_iter.next();
-				} else if cp < *end {
-					// match! skip this cp and continue with next one!
+				} else if cp <= *end {
+					// if we're in range and start is 1 or 0, we're entirely done,
+					// as that means that all remaining checkpoints are already complete
+					if *start <= 1 {
+						break 'cp
+					}
+					// match! advance by whatever number of steps we need to end this iteration
+					// at checkpoint `start`, or right before, considering our step size
+					iter.advance_by(((cp - *start) as usize).div_floor(step_size)).ok();
+					// we also already know that we need to compare with the next range item
+					completed_range = completed_iter.next();
 					continue 'cp
 				} else {
 					// this cp is still higher than our highest range end, so we wait and try again
