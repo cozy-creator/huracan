@@ -14,6 +14,9 @@ throughput:
     step1: 2
     step2: 3
     mongo:
+  objectqueries:
+    batchsize: 50
+    batchwaittimeoutms: 1000
   mongo:
     batchsize: 10000
     batchwaittimeoutms: 1000
@@ -32,6 +35,9 @@ lowlatency:
     step1: 1
     step2: 4
     mongo: 4
+  objectqueries:
+    batchsize: 50
+    batchwaittimeoutms: 10
   mongo:
     batchsize: 64
     batchwaittimeoutms: 10

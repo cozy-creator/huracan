@@ -240,11 +240,14 @@ async fn spawn_fullscan_pipeline(
 			tokio::spawn({
 				let sui = sui.clone();
 				let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await?;
-				let object_ids_rx = object_ids_rx.clone();
+				let object_ids_rx = object_ids_rx.clone().chunks_timeout(
+					pc.objectqueries.batchsize,
+					Duration::from_millis(pc.objectqueries.batchwaittimeoutms),
+				);
 				let mongo_tx = mongo_tx.clone();
 
 				async move {
-					let stream = transform(object_ids_rx, sui).await;
+					let stream = transform_batched(object_ids_rx, sui).await;
 					let stream = stream! {
 						for await (status, item) in stream {
 							if let StepStatus::Err = status {
@@ -517,19 +520,6 @@ async fn do_poll(
 			}
 		}
 	}
-}
-
-async fn transform<'a, S: Stream<Item = ObjectItem> + 'a>(
-	stream: S,
-	sui: ClientPool,
-) -> impl Stream<Item = (StepStatus, ObjectItem)> + 'a {
-	// batch incoming items so we can amortize the cost of sui api calls,
-	// but send them off one by one, so any downstream consumer (e.g. Pulsar client) can apply their
-	// own batching logic, if necessary (e.g. Pulsar producer will auto-batch transparently, if configured)
-
-	let stream = stream.chunks_timeout(50, Duration::from_millis(1_000));
-
-	transform_batched(stream, sui).await
 }
 
 async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
