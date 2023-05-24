@@ -11,7 +11,7 @@ use sui_sdk::{
 	SuiClient, SuiClientBuilder,
 };
 use sui_types::{
-	base_types::{ObjectID, SequenceNumber, TransactionDigest},
+	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::time::Instant;
@@ -111,4 +111,34 @@ impl ClientPool {
 		let sui = SuiClientBuilder::default().build(&config.url).await?;
 		Ok(Client { id, config, sui, backoff: None, reqs: 0 })
 	}
+}
+
+pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
+	if let Some(err) = res.error {
+		use sui_types::error::SuiObjectResponseError::*;
+		match err {
+			Deleted { object_id, version, digest: _ } => {
+				warn!(object_id = ?object_id, version = ?version, "object not available: object has been deleted");
+			}
+			NotExists { object_id } => {
+				warn!(object_id = ?object_id, "object not available: object doesn't exist");
+			}
+			Unknown => {
+				warn!(object_id = ?id, "object not available: unknown error");
+			}
+			DisplayError { error } => {
+				warn!(object_id = ?id, "object not available: display error: {}", error);
+			}
+		};
+		return None
+	}
+	if let Some(obj) = res.data {
+		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
+		let mut bytes = Vec::with_capacity(4096);
+		let bson = bson::to_bson(&obj).unwrap();
+		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+		return Some((obj.version, bytes))
+	}
+	warn!(object_id = ?id, "neither .data nor .error was set in get_object response!");
+	return None
 }
