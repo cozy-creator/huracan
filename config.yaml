@@ -35,6 +35,7 @@ lowlatency:
     mongoinfactor: 1
     last: 256
   workers:
+    # this setting is only relevant for the "microscan" task
     step1: 1
     step2: 4
     mongo: 4
