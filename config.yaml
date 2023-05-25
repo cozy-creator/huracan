@@ -2,6 +2,9 @@ env: dev
 net: testnet
 rocksdbfile: ./fullscan.tmp.db
 
+# how many checkpoints we need to be behind to change into throughput mode for catching up quickly
+fallbehindthreshold: 120
+
 throughput:
   queuebuffers:
     # 1024 * 1024
