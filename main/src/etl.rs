@@ -124,8 +124,9 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
-			let mut last_microscan_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
-			let mut txns_already_processed_count = BTreeMap::new();
+			let start_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+			let mut last_microscan_cp = start_cp;
+			let mut txns_already_processed = BTreeMap::new();
 
 			loop {
 				if stop.load(Relaxed) {
@@ -133,6 +134,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				}
 
 				let latest_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+				let cp_offset = (latest_cp - start_cp) as i64;
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
 				//		so we don't have to ask MongoDB here
 				// get last fully completed cp as a starting point for computing how far we've fallen behind
@@ -174,12 +176,16 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				// 		items from poll_items_transactions, but I don't know how to do that (yet),
 				//		so applying a trick of waiting for a max of X ms via tokio timer + select!
 				//		(luckily, select! knows how to poll like we need it here!)
-				let timeout = tokio::time::sleep(Duration::from_millis(100));
+				let timeout = tokio::time::sleep(Duration::from_millis(10));
 				pin!(timeout);
 				loop {
 					tokio::select! {
 						Some(tx) = poll_items_transactions.recv() => {
-							match txns_already_processed_count.try_insert(tx, 1) {
+							// we're using the cp offset relative to process start as the value so we can keep track of
+							// when the entry was made, so even if we should have bugs leading to mismatching
+							// and non-removal of entries, we can still remove them on an age basis
+							// and thus prevent memory leaks
+							match txns_already_processed.try_insert(tx, cp_offset) {
 								Ok(_) => {
 									// it was a new entry
 								},
@@ -203,6 +209,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						}
 					}
 				}
+				// gc: stop remembering txs added more than 120 checkpoints ago
+				txns_already_processed.drain_filter(|_, v| latest_cp as i64 - v.abs() > 120);
 
 				// spawn the microscan
 				let mut scan_items = spawn_microscan(latest_cp, last_microscan_cp, &cfg, sui.clone()).await;
@@ -215,8 +223,11 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				while let Some((tx, item)) = scan_items.next().await {
 					// if it's a new tx, then we want to check if we need to skip all items of this tx
 					if let Some(tx) = tx {
-						// keep track of "already processed" counts, figure out if we want to skip this tx
-						match txns_already_processed_count.try_insert(tx, -1) {
+						// keep track of "already processed" txs, figure out if we want to skip this tx
+						// first, see not on try_insert() above
+						// then, we're using a negative value here, so we can discern between entries
+						// made from the polling side (positive) vs microscan side (negative)
+						match txns_already_processed.try_insert(tx, -cp_offset) {
 							Ok(_) => {
 								// tx was not seen yet
 								skip = false;

@@ -1,4 +1,5 @@
 #![feature(drain_filter)]
+#![feature(btree_drain_filter)]
 #![feature(slice_group_by)]
 #![feature(let_chains)]
 #![feature(iter_advance_by)]
