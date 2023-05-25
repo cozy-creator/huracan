@@ -132,9 +132,6 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					break
 				}
 
-				// 2 minutes?
-				const FULLSCAN_IF_BEHIND_BY: u64 = 120;
-
 				let latest_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
 				//		so we don't have to ask MongoDB here
@@ -145,7 +142,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
-				if latest_cp - last_completed_cp.unwrap_or(0) > FULLSCAN_IF_BEHIND_BY {
+				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.fallbehindthreshold as u64 {
 					// ask low-latency work to pause
 					pause_ll.store(250, Relaxed);
 					// run fullscan

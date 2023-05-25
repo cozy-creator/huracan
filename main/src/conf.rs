@@ -110,15 +110,16 @@ pub struct SuiConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
-	pub env:         String,
-	pub net:         String,
-	pub rocksdbfile: String,
-	pub throughput:  PipelineConfig,
-	pub lowlatency:  PipelineConfig,
-	pub mongo:       MongoConfig,
-	pub pulsar:      PulsarConfig,
-	pub sui:         SuiConfig,
-	pub log:         LogConfig,
+	pub env:                 String,
+	pub net:                 String,
+	pub rocksdbfile:         String,
+	pub throughput:          PipelineConfig,
+	pub lowlatency:          PipelineConfig,
+	pub fallbehindthreshold: usize,
+	pub mongo:               MongoConfig,
+	pub pulsar:              PulsarConfig,
+	pub sui:                 SuiConfig,
+	pub log:                 LogConfig,
 }
 
 impl AppConfig {
