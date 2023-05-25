@@ -189,7 +189,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 								Err(OccupiedError { entry: e, .. }) => {
 									let v = e.get();
 									if *v > 0 {
-										// we don't count duplicate items, we only count to +1/-1
+										// duplicate processing from polling side, probably a bug somewhere we need to fix!
+										warn!("[FIXME] duplicate transaction from polling side! ignoring, but this may indicate a bug in our own or in external code!");
 									} else if *v < 0 {
 										// it's been seen by microscan first and already "flushed",
 										// so we need to remove this entry
