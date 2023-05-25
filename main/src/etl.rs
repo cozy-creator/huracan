@@ -1,8 +1,9 @@
 use std::{
+	collections::{btree_map::OccupiedError, BTreeMap},
 	fmt::{Display, Formatter},
 	io::Cursor,
 	iter::zip,
-	sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed},
+	sync::atomic::{AtomicU16, Ordering::Relaxed},
 };
 
 use anyhow::Result;
@@ -16,7 +17,7 @@ use pulsar::{Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::rpc_types::{SuiObjectDataOptions, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery};
 use sui_types::{
-	base_types::{ObjectID, SequenceNumber},
+	base_types::{ObjectID, SequenceNumber, TransactionDigest},
 	messages_checkpoint::CheckpointSequenceNumber,
 	query::TransactionFilter,
 };
@@ -64,19 +65,44 @@ impl Display for StepStatus {
 	}
 }
 
-pub async fn start(cfg: &AppConfig) -> Result<()> {
+pub async fn run(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
+	let pause_ll = Arc::new(AtomicU16::new(0));
 
-	let pause = Arc::new(AtomicU16::new(0));
 	// poll for latest txs
 	// (low-latency focus)
-	let (poll_items, poll_observed_cps) = spawn_poll(cfg, &mut sui, &stop, &pause).await;
+	let (mut poll_items, _poll_observed_cps) = spawn_poll(cfg, sui.clone(), pause_ll.clone()).await;
+
+	let (ll_items_tx, ll_items_rx) = async_channel::unbounded();
+	let (poll_items_transactions_tx, mut poll_items_transactions) = tokio::sync::mpsc::unbounded_channel();
+
+	// need to accomplish two things from the poll_items stream:
+	// 1) pass on as normal input to ll pipeline immediately
+	// 2) pass all seen transaction digests on to another stream
+	tokio::spawn({
+		let ll_items_tx = ll_items_tx.clone();
+		async move {
+			while let Some(it) = poll_items.next().await {
+				// doing this first because we can copy the digest and then move the full value
+				if let Some(tx) = &it.0 {
+					if poll_items_transactions_tx.send(*tx).is_err() {
+						break
+					}
+				}
+				// copy over to normal ll pipeline input channel
+				if ll_items_tx.send(it).await.is_err() {
+					break
+				}
+			}
+		}
+	});
 
 	// rest of the low-latency pipeline
 	let (ll_cp_control_tx, ll_handle) =
-		spawn_pipeline_tail(cfg, &cfg.lowlatency, sui.clone(), pulsar.clone(), poll_items).await?;
+		spawn_pipeline_tail(cfg.clone(), cfg.lowlatency.clone(), sui.clone(), pulsar.clone(), ll_items_rx.clone())
+			.await?;
 
 	// observe checkpoints flow:
 	// if we fell behind too far, we focus on throughput until caught up:
@@ -84,7 +110,6 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 	// else ensure completion of latest checkpoints
 	tokio::spawn({
 		let stop = stop.clone();
-		let pause = pause.clone();
 		let cfg = cfg.clone();
 
 		// load latest completed checkpoint
@@ -100,13 +125,7 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
 			let mut last_microscan_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
-			// get last fully completed cp as a starting point for computing how far we've fallen behind
-			// and whether we need to go into high-throughput catch-up mode
-			let mut last_completed_cp = coll
-				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
-				.await
-				.unwrap()
-				.map(|cp| cp._id);
+			let mut txns_already_processed_count = BTreeMap::new();
 
 			loop {
 				if stop.load(Relaxed) {
@@ -117,9 +136,18 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 				const FULLSCAN_IF_BEHIND_BY: u64 = 120;
 
 				let latest_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
+				//		so we don't have to ask MongoDB here
+				// get last fully completed cp as a starting point for computing how far we've fallen behind
+				// and whether we need to go into high-throughput catch-up mode
+				let last_completed_cp = coll
+					.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
+					.await
+					.unwrap()
+					.map(|cp| cp._id);
 				if latest_cp - last_completed_cp.unwrap_or(0) > FULLSCAN_IF_BEHIND_BY {
 					// ask low-latency work to pause
-					pause.store(250, Relaxed);
+					pause_ll.store(250, Relaxed);
 					// run fullscan
 					let (step1completed_rx, handle) =
 						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone()).await.unwrap();
@@ -127,7 +155,7 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 					// so we incur as little unnecessary latency as possible while just waiting for
 					// some remaining items to be completed
 					tokio::spawn({
-						let pause = pause.clone();
+						let pause = pause_ll.clone();
 						async move {
 							step1completed_rx.await.ok();
 							pause.store(0, Relaxed);
@@ -136,41 +164,171 @@ pub async fn start(cfg: &AppConfig) -> Result<()> {
 					let max_cp = handle.await.unwrap();
 					if max_cp > 0 {
 						// update all reference checkpoints
-						last_completed_cp = Some(max_cp);
 						last_microscan_cp = max_cp;
 					}
 					// check again
 					continue
 				}
 
-				spawn_scan(latest_cp, last_microscan_cp).await;
+				// prepare running microscan frontend
 
-				// tokio::select! {}
+				// collect all currently known-processed tx digests from polling strategy
+				// XXX ideally we'd write some code that directly retrieves only the currently ready
+				// 		items from poll_items_transactions, but I don't know how to do that (yet),
+				//		so applying a trick of waiting for a max of X ms via tokio timer + select!
+				//		(luckily, select! knows how to poll like we need it here!)
+				let timeout = tokio::time::sleep(Duration::from_millis(100));
+				pin!(timeout);
+				loop {
+					tokio::select! {
+						Some(tx) = poll_items_transactions.recv() => {
+							match txns_already_processed_count.try_insert(tx, 1) {
+								Ok(_) => {
+									// it was a new entry
+								},
+								Err(OccupiedError { entry: e, .. }) => {
+									let v = e.get();
+									if *v > 0 {
+										// we don't count duplicate items, we only count to +1/-1
+									} else if *v < 0 {
+										// it's been seen by microscan first and already "flushed",
+										// so we need to remove this entry
+										e.remove();
+									} else {
+										unreachable!()
+									}
+								}
+							}
+						},
+						_ = &mut timeout => {
+							break
+						}
+					}
+				}
+
+				// spawn the microscan
+				let mut scan_items = spawn_microscan(latest_cp, last_microscan_cp, &cfg, sui.clone()).await;
+
+				// process all items it returns, to figure out which ones may have been missed by the polling strategy
+				// and calculate and send off checkpoint control messages as we go, too
+				let mut cur_cp = 0u64;
+				let mut num_items = 0u32;
+				let mut skip = false;
+				while let Some((tx, item)) = scan_items.next().await {
+					// if it's a new tx, then we want to check if we need to skip all items of this tx
+					if let Some(tx) = tx {
+						// keep track of "already processed" counts, figure out if we want to skip this tx
+						match txns_already_processed_count.try_insert(tx, -1) {
+							Ok(_) => {
+								// tx was not seen yet
+								skip = false;
+							}
+							Err(OccupiedError { entry: e, .. }) => {
+								let v = e.get();
+								if *v < 0 {
+									// duplicate processing from microscan side, probably a bug somewhere we need to fix!
+									warn!("[FIXME] duplicate transaction from microscan side! ignoring, but this may indicate a bug in our own or in external code!");
+									skip = false;
+								} else if *v > 0 {
+									// tx was already seen from polling side, so we want to skip it here
+									// meaning: we want to prevent the associated objects to be processed
+									// as that would mean processing them a second time!
+									e.remove();
+									skip = true;
+								} else {
+									unreachable!()
+								}
+							}
+						}
+					}
+
+					// checkpoint handling:
+					// - count items for current checkpoint
+					// - submit previous checkpoint count if we've just changed checkpoints
+					let cp = item.cp as u64;
+					if cur_cp != cp {
+						if cur_cp != 0 {
+							if ll_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.is_err() {
+								break
+							}
+						}
+						cur_cp = cp;
+						num_items = 0;
+					}
+
+					num_items += 1;
+
+					// if we're not currently skipping, then we also need to forward the item to the pipeline
+					if !skip {
+						if ll_items_tx.send((tx, item)).await.is_err() {
+							break
+						}
+					}
+				}
+
+				// we're done, the microscan is complete
+				// (at least the frontend; backend items may still be processing in the background)
+				last_microscan_cp = latest_cp;
 			}
 		}
 	});
+
+	// keep running for as long as our low-latency pipeline is running
+	ll_handle.await?;
 
 	Ok(())
 }
 
 async fn spawn_poll(
 	cfg: &AppConfig,
-	sui: &ClientPool,
-	stop: &Arc<AtomicBool>,
-	pause: &Arc<AtomicU16>,
-) -> (ACReceiver<ObjectItem>, UnboundedReceiver<CheckpointSequenceNumber>) {
+	sui: ClientPool,
+	pause: Arc<AtomicU16>,
+) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
-	let (poll_tx, poll_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
-	tokio::spawn(do_poll(sui.clone(), stop.clone(), pause.clone(), observed_checkpoints_tx, poll_tx));
-	(poll_rx, observed_checkpoints_rx)
+	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
+	tokio::spawn(do_poll(sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
+	(items_rx, observed_checkpoints_rx)
+}
+
+async fn spawn_microscan(
+	checkpoint_max: u64,
+	stop_at_cp: u64,
+	cfg: &AppConfig,
+	sui: ClientPool,
+) -> ACReceiver<(Option<TransactionDigest>, ObjectItem)> {
+	let default_num_workers = sui.configs.len();
+	let num_step1_workers = cfg.lowlatency.workers.step1.unwrap_or(default_num_workers);
+	info!("[microscan] workers: {}", num_step1_workers);
+
+	// turn our last cp into a fake completed range, which will make the scan stop
+	let completed_checkpoint_ranges = vec![(stop_at_cp, 0)];
+
+	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
+	let step_size = num_step1_workers;
+	let mut handles = Vec::with_capacity(num_step1_workers);
+	for partition in 0..num_step1_workers {
+		handles.push(tokio::spawn(do_scan(
+			cfg.lowlatency.clone(),
+			checkpoint_max,
+			completed_checkpoint_ranges.clone(),
+			step_size,
+			partition,
+			sui.clone(),
+			None,
+			items_tx.clone(),
+			None,
+		)));
+	}
+
+	items_rx
 }
 
 async fn spawn_pipeline_tail(
-	cfg: &AppConfig,
-	pc: &PipelineConfig,
+	cfg: AppConfig,
+	pc: PipelineConfig,
 	sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
-	object_ids_rx: ACReceiver<ObjectItem>,
+	object_ids_rx: ACReceiver<(Option<TransactionDigest>, ObjectItem)>,
 ) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
@@ -195,8 +353,9 @@ async fn spawn_pipeline_tail(
 				let mongo_tx = mongo_tx.clone();
 
 				async move {
-					let object_ids_rx =
-						object_ids_rx.chunks_timeout(batch_size, Duration::from_millis(batch_wait_timeout));
+					let object_ids_rx = object_ids_rx
+						.map(|(_, item)| item)
+						.chunks_timeout(batch_size, Duration::from_millis(batch_wait_timeout));
 					let stream = transform_batched(object_ids_rx, sui).await;
 					let stream = stream! {
 						for await (status, item) in stream {
@@ -279,8 +438,6 @@ async fn spawn_pipeline_tail(
 	Ok((cp_control_tx, handle))
 }
 
-async fn spawn_scan(_: u64, _: u64) {}
-
 #[allow(unused)]
 async fn spawn_fullscan_pipeline(
 	cfg: &AppConfig,
@@ -315,7 +472,8 @@ async fn spawn_fullscan_pipeline(
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
 	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
 
-	let (cp_control_tx, handle) = spawn_pipeline_tail(cfg, pc, sui.clone(), pulsar, object_ids_rx).await?;
+	let (cp_control_tx, handle) =
+		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), pulsar, object_ids_rx).await?;
 
 	// spawn as many step 1 workers as we have RPC server urls,
 	// let each worker freely balance requests between them
@@ -331,9 +489,9 @@ async fn spawn_fullscan_pipeline(
 				step_size,
 				partition,
 				sui.clone(),
-				db.clone(),
+				Some(db.clone()),
 				object_ids_tx.clone(),
-				cp_control_tx.clone(),
+				Some(cp_control_tx.clone()),
 			)));
 		}
 		drop(object_ids_tx);
@@ -354,9 +512,9 @@ async fn do_scan(
 	step_size: usize,
 	partition: usize,
 	mut sui: ClientPool,
-	db: Arc<DBWithThreadMode<SingleThreaded>>,
-	object_ids_tx: ACSender<ObjectItem>,
-	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
+	db: Option<Arc<DBWithThreadMode<SingleThreaded>>>,
+	object_ids_tx: ACSender<(Option<TransactionDigest>, ObjectItem)>,
+	cp_control_tx: Option<TSender<(CheckpointSequenceNumber, u32)>>,
 ) {
 	let stop = ctrl_c_bool();
 	let mut completed_iter = completed_checkpoint_ranges.iter();
@@ -412,32 +570,41 @@ async fn do_scan(
 			match page {
 				Ok(page) => {
 					retries_left = pc.step1retries;
-					for tx_block in page.data {
-						if let Some(changes) = tx_block.object_changes {
+					for block in page.data {
+						if let Some(changes) = block.object_changes {
+							let mut tx_digest_once = Some(block.digest);
 							for change in changes {
 								let Some((object_id, version, deleted)) = client::parse_change(change) else {
 									continue;
 								};
-								let k = object_id.as_slice();
-								// known?
-								if let None = db.get_pinned(k).unwrap() {
-									// no, new one, so we mark it as known
-									db.put(k, Vec::new()).unwrap();
-									num_objects += 1;
-									// send to step 2
-									let send_res = object_ids_tx
-										.send(ObjectItem {
+								if let Some(db) = &db {
+									let k = object_id.as_slice();
+									// known?
+									if let None = db.get_pinned(k).unwrap() {
+										// no, new one, so we mark it as known
+										db.put(k, Vec::new()).unwrap();
+									// keep going below
+									} else {
+										continue
+									}
+								}
+								num_objects += 1;
+								// send to step 2
+								let send_res = object_ids_tx
+									.send((
+										tx_digest_once.take(),
+										ObjectItem {
 											cp: cp as CheckpointSequenceNumber,
 											deletion: deleted,
 											id: object_id,
 											version,
 											bytes: Default::default(),
-										})
-										.await;
-									if send_res.is_err() {
-										// channel closed, consumers stopped
-										return
-									}
+										},
+									))
+									.await;
+								if send_res.is_err() {
+									// channel closed, consumers stopped
+									return
 								}
 							}
 						}
@@ -445,11 +612,15 @@ async fn do_scan(
 					if !page.has_next_page {
 						// we're done with this cp
 						// send control message about number of expected object tasks from this cp
-						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						if let Some(cp_control_tx) = &cp_control_tx {
+							cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						}
 						break
 					} else if page.next_cursor.is_none() {
 						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
-						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						if let Some(cp_control_tx) = &cp_control_tx {
+							cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
+						}
 						break
 					} else {
 						cursor = page.next_cursor;
@@ -471,16 +642,16 @@ async fn do_scan(
 // TODO use first configured rpc source instead of RR, assuming that's our lowest-latency one
 async fn do_poll(
 	mut sui: ClientPool,
-	stop: Arc<AtomicBool>,
 	pause: Arc<AtomicU16>,
 	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
-	tx: ACSender<ObjectItem>,
+	items: ACSender<(Option<TransactionDigest>, ObjectItem)>,
 ) {
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 	);
 
+	let stop = ctrl_c_bool();
 	let mut cursor = None;
 	let mut retry_count = 0;
 	let mut desc = true;
@@ -534,10 +705,14 @@ async fn do_poll(
 						observed_checkpoints_tx.send(cp).ok();
 						continue;
 					}
+					let mut tx_digest_once = Some(block.digest);
 					let Some(changes) = block.object_changes else { continue };
 					for (id, version, deletion) in changes.into_iter().filter_map(client::parse_change) {
-						if tx
-							.send(ObjectItem { cp: 0, deletion, id, version, bytes: Default::default() })
+						if items
+							.send((
+								tx_digest_once.take(),
+								ObjectItem { cp: 0, deletion, id, version, bytes: Default::default() },
+							))
 							.await
 							.is_err()
 						{

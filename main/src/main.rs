@@ -3,6 +3,7 @@
 #![feature(let_chains)]
 #![feature(iter_advance_by)]
 #![feature(int_roundings)]
+#![feature(map_try_insert)]
 
 #[macro_use]
 extern crate serde;
@@ -30,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	etl::start(&cfg).await.unwrap();
+	etl::run(&cfg).await.unwrap();
 
 	Ok(())
 }
