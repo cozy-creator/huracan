@@ -681,7 +681,7 @@ async fn do_poll(
 			tokio::time::sleep(Duration::from_millis(pause as u64)).await;
 		}
 		{
-			let wait_ms = MIN_POLL_INTERVAL_MS - last_poll.elapsed().as_millis() as u64;
+			let wait_ms = MIN_POLL_INTERVAL_MS.saturating_sub(last_poll.elapsed().as_millis() as u64);
 			if wait_ms > 0 {
 				tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 			}
