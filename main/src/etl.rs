@@ -295,7 +295,7 @@ async fn spawn_poll(
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
 	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
-	tokio::spawn(do_poll(sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
+	tokio::spawn(do_poll(cfg.clone(), sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
 	(items_rx, observed_checkpoints_rx)
 }
 
@@ -650,6 +650,7 @@ async fn do_scan(
 
 // TODO use first configured rpc source instead of RR, assuming that's our lowest-latency one
 async fn do_poll(
+	cfg: AppConfig,
 	mut sui: ClientPool,
 	pause: Arc<AtomicU16>,
 	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
@@ -665,8 +666,7 @@ async fn do_poll(
 	let mut retry_count = 0;
 	let mut desc = true;
 	let mut checkpoints = HashSet::with_capacity(64);
-	const MIN_POLL_INTERVAL_MS: u64 = 16;
-	let mut last_poll = Instant::now().checked_sub(Duration::from_millis(MIN_POLL_INTERVAL_MS)).unwrap();
+	let mut last_poll = Instant::now().checked_sub(Duration::from_millis(cfg.pollintervalms)).unwrap();
 
 	loop {
 		if stop.load(Relaxed) {
@@ -681,7 +681,7 @@ async fn do_poll(
 			tokio::time::sleep(Duration::from_millis(pause as u64)).await;
 		}
 		{
-			let wait_ms = MIN_POLL_INTERVAL_MS.saturating_sub(last_poll.elapsed().as_millis() as u64);
+			let wait_ms = cfg.pollintervalms.saturating_sub(last_poll.elapsed().as_millis() as u64);
 			if wait_ms > 0 {
 				tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 			}
