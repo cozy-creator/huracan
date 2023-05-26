@@ -47,7 +47,7 @@ lowlatency:
     batchsize: 50
     batchwaittimeoutms: 10
   mongo:
-    batchsize: 64
+    batchsize: 1024
     batchwaittimeoutms: 10
     retries: 3
     zstdlevel: 1
