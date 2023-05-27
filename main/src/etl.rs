@@ -134,7 +134,6 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				}
 
 				let latest_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
-				let cp_offset = (latest_cp - start_cp) as i64;
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
 				//		so we don't have to ask MongoDB here
 				// get last fully completed cp as a starting point for computing how far we've fallen behind
@@ -178,6 +177,11 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				//		(luckily, select! knows how to poll like we need it here!)
 				let timeout = tokio::time::sleep(Duration::from_millis(10));
 				pin!(timeout);
+				// checkpoint-based marker value we use to keep track of the time at which we add values
+				// to poll_items_transactions, so we can do regular cleanup and prevent the collection
+				// from growing indefinitely
+				// needs to be at >= 1 so it works with our approach below
+				let cp_offset_marker = (latest_cp - start_cp).max(1) as i64;
 				loop {
 					tokio::select! {
 						Some(tx) = poll_items_transactions.recv() => {
@@ -185,7 +189,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 							// when the entry was made, so even if we should have bugs leading to mismatching
 							// and non-removal of entries, we can still remove them on an age basis
 							// and thus prevent memory leaks
-							match txns_already_processed.try_insert(tx, cp_offset) {
+							match txns_already_processed.try_insert(tx, cp_offset_marker) {
 								Ok(_) => {
 									// it was a new entry
 								},
@@ -227,7 +231,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						// first, see not on try_insert() above
 						// then, we're using a negative value here, so we can discern between entries
 						// made from the polling side (positive) vs microscan side (negative)
-						match txns_already_processed.try_insert(tx, -cp_offset) {
+						match txns_already_processed.try_insert(tx, -cp_offset_marker) {
 							Ok(_) => {
 								// tx was not seen yet
 								skip = false;
