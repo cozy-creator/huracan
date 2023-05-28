@@ -3,6 +3,9 @@ primary_region = "fra"
 kill_signal = "SIGINT"
 kill_timeout = "30s"
 
+[build]
+image = "ghcr.io/capsule-craft/sui-indexer/sui-indexer:latest"
+
 [experimental]
 auto_rollback = true
 
