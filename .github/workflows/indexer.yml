@@ -4,7 +4,7 @@ on:
     branches:
       - gha
     paths:
-      - "main/**"
+      - 'main/**'
       - 'macros/**'
       - 'config.yaml'
       - '!*.txt'
@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: install dependencies
-        run: sudo apt-get install -y -q clang protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
