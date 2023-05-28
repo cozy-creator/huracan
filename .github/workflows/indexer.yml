@@ -11,6 +11,8 @@ on:
 env:
   CRATE_DIR: main
   BIN: sui-indexer
+  # XXX can't reference env context here, so we have to repeat ourselves
+  IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
   RUSTC_WRAPPER: 'true'
   SCCACHE_GHA_ENABLED: sccache
   REGISTRY: ghcr.io
@@ -56,8 +58,6 @@ jobs:
     name: deploy testnet
     runs-on: ubuntu-latest
     needs: build
-    env:
-      IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.BIN }}
     steps:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
@@ -70,8 +70,6 @@ jobs:
     name: deploy mainnet
     runs-on: ubuntu-latest
     needs: build
-    env:
-      IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.BIN }}
     steps:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
