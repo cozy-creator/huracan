@@ -14,7 +14,7 @@ env:
   RUSTC_WRAPPER: 'true'
   SCCACHE_GHA_ENABLED: sccache
   REGISTRY: ghcr.io
-  IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.BIN }}
+  IMAGE: ghcr.io/${{ github.repository }}/${{ env.BIN }}
 jobs:
   build:
     runs-on: ubuntu-latest
