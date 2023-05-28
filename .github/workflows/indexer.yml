@@ -13,8 +13,8 @@ env:
   APP_BIN: sui-indexer
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
-  RUSTC_WRAPPER: 'true'
-  SCCACHE_GHA_ENABLED: sccache
+#  RUSTC_WRAPPER: 'true'
+#  SCCACHE_GHA_ENABLED: sccache
   REGISTRY: ghcr.io
 jobs:
   build:
