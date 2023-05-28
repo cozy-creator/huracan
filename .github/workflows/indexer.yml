@@ -10,7 +10,7 @@ on:
       - '!*.txt'
 env:
   CRATE_DIR: main
-  BIN: sui-indexer
+  APP_BIN: sui-indexer
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
   RUSTC_WRAPPER: 'true'
@@ -30,7 +30,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release --bin ${{ env.BIN }}
+          args: --release --bin ${{ env.APP_BIN }}
       - run: mkdir binaries && mv target/release/$BIN binaries/
       - uses: docker/login-action@v2
         with:
@@ -49,7 +49,7 @@ jobs:
       - uses: docker/build-push-action@v4
         with:
           context: "{{defaultContext}}"
-          build-args: BIN=${{ env.BIN }}
+          build-args: BIN=${{ env.APP_BIN }}
           build-contexts: binaries=binaries
           push: true
           tags: ${{ steps.meta.outputs.tags }}
