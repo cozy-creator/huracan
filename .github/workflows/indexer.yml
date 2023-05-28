@@ -4,8 +4,8 @@ on:
     branches:
       - gha
     paths:
-      - 'main/**'
-      - 'macros/**'
+      - 'main/**/*'
+      - 'macros/**/*'
       - 'config.yaml'
       - '!*.txt'
 env:
