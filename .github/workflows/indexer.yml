@@ -23,14 +23,11 @@ jobs:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@nightly-2023-05-16
         with:
           profile: minimal
       - uses: mozilla-actions/sccache-action@v0.0.3
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --bin ${{ env.APP_BIN }}
+      - run: cargo build --release --bin ${{ env.APP_BIN }}
       - run: mkdir binaries && mv target/release/$BIN binaries/
       - uses: docker/login-action@v2
         with:
