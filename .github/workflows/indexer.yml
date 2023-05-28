@@ -24,8 +24,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@nightly-2023-05-16
-        with:
-          profile: minimal
       - uses: mozilla-actions/sccache-action@v0.0.3
       - run: cargo build --release --bin ${{ env.APP_BIN }}
       - run: mkdir binaries && mv target/release/$BIN binaries/
