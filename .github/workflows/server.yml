@@ -4,7 +4,7 @@ name: (prod) (server) build & deploy
 on:
   push:
     branches:
-      - main
+      - gha
     paths:
       - '${{ env.CRATE_DIR }}/**'
       - 'config.yaml'

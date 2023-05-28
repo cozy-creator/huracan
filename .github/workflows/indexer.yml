@@ -2,7 +2,7 @@ name: (prod) (indexer) build & deploy
 on:
   push:
     branches:
-      - main
+      - gha
     paths:
       - '${{ env.CRATE_DIR }}/**'
       - 'macros/**'
