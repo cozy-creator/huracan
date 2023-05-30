@@ -13,3 +13,4 @@ auto_rollback = true
 [env]
 APP_ENV = "prod"
 APP_NET = "mainnet"
+APP_MONGO_COLLECTIONBASE = "objects"

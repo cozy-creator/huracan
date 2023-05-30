@@ -4926,6 +4926,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
 
 [[package]]
+name = "indexer"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-recursion",
+ "async-stream",
+ "bson",
+ "dotenv",
+ "figment",
+ "futures",
+ "futures-batch",
+ "futures-util",
+ "jsonrpsee",
+ "macros",
+ "mongodb",
+ "pulsar",
+ "rocksdb",
+ "serde 1.0.160",
+ "serde_json",
+ "sui-sdk",
+ "sui-types",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber 0.3.17",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10407,35 +10436,6 @@ dependencies = [
  "sui-types",
  "tracing",
  "workspace-hack",
-]
-
-[[package]]
-name = "sui-indexer"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "async-recursion",
- "async-stream",
- "bson",
- "dotenv",
- "figment",
- "futures",
- "futures-batch",
- "futures-util",
- "jsonrpsee",
- "macros",
- "mongodb",
- "pulsar",
- "rocksdb",
- "serde 1.0.160",
- "serde_json",
- "sui-sdk",
- "sui-types",
- "tokio",
- "tracing",
- "tracing-futures",
- "tracing-subscriber 0.3.17",
 ]
 
 [[package]]

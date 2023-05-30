@@ -410,9 +410,14 @@ const API_PREFIX: &'static str = "/api/v1";
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
+	let env = std::env::var("APP_ENV").unwrap_or("dev".into());
+	let net = std::env::var("APP_NET").unwrap_or("testnet".into());
 	let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
 	let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
-	let mongo_collection = std::env::var("APP_MONGO_COLLECTION").unwrap_or("dev_testnet_wrappingtest2".into());
+	let mongo_collection = {
+		let base = std::env::var("APP_MONGO_COLLECTIONBASE").unwrap_or("objects".into());
+		format!("{}_{}_{}", env, net, base)
+	};
 
 	let db = {
 		let mut client_options = ClientOptions::parse(mongo_uri).await?;
