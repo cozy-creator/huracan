@@ -3,6 +3,7 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 
+
 [dependencies]
 async-graphql = { version = "5.0.7", features = ["bson", "chrono", "dataloader", "apollo_tracing"] }
 async-graphql-actix-web = "5.0.7"
