@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2023-05-15
-      - uses: mozilla-actions/sccache-action@v0.0.3
+#      - uses: mozilla-actions/sccache-action@v0.0.3
       - run: cargo build --release --bin ${{ env.APP_BIN }}
 #        env:
 #          SCCACHE_GHA_ENABLED: "true"
