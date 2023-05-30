@@ -44,7 +44,7 @@ jobs:
         with:
           # see: https://github.com/superfly/flyctl/issues/104#issuecomment-614973806
           registry: ${{ env.FLY_REGISTRY }}
-          username: ${{ secrets.FLY_TOKEN }}
+          username: ${{ secrets.FLY_API_TOKEN }}
           password: x
       - uses: docker/metadata-action@v4
         id: meta
