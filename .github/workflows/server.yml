@@ -12,8 +12,11 @@ env:
   CRATE_DIR: server
   APP_BIN: server
   # XXX can't reference env context here, so we have to repeat ourselves
-  IMAGE: ghcr.io/${{ github.repository }}/server
+  IMAGE: ${{ github.repository }}/server
+  TAG: gha
   REGISTRY: ghcr.io
+  FLY_REGISTRY: registry.fly.io
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,6 +40,8 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl auth docker
       - uses: docker/metadata-action@v4
         id: meta
         with:
@@ -52,7 +57,9 @@ jobs:
           build-args: BIN=${{ env.APP_BIN }}
           build-contexts: binaries=binaries
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
   deploy_testnet:
     name: deploy testnet
@@ -62,9 +69,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: testnet
-        run: flyctl deploy --image ${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-testnet.toml
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --image ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-testnet.toml
   deploy_mainnet:
     name: deploy mainnet
     runs-on: ubuntu-latest
@@ -73,6 +78,6 @@ jobs:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: mainnet
-        run: flyctl deploy --image ${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-mainnet.toml
+        run: flyctl deploy --image ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-mainnet.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
