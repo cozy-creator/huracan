@@ -13,7 +13,7 @@ env:
   APP_BIN: server
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ${{ github.repository }}/server
-  TAG: gha
+  TAG: ${{ github.head_ref || github.ref_name }}
   REGISTRY: ghcr.io
   FLY_REGISTRY: registry.fly.io
   FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -62,9 +62,8 @@ jobs:
           build-args: BIN=${{ env.APP_BIN }}
           build-contexts: binaries=binaries
           push: true
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
+          tags: ${{ steps.meta.outputs.tags }}
+#            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
   deploy_testnet:
     name: deploy testnet
