@@ -15,7 +15,7 @@ use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
 	options::{ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
-	Collection, Database, IndexModel,
+	Collection, IndexModel,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -27,18 +27,18 @@ struct QueryRoot;
 
 #[derive(InputObject)]
 struct ObjectArgsInput {
-	ids: Option<Vec<ID>>,
-	owner: Option<ID>,
+	ids:    Option<Vec<ID>>,
+	owner:  Option<ID>,
 	owners: Option<Vec<ID>>,
 	// could be just $package, or $p::$module or $p::$m::$struct or $p::$m::$s<$generics...>
 	// we parse them, translate them into access via indexes
 	#[graphql(name = "type")]
-	type_: Option<String>,
-	types: Option<Vec<String>>,
+	type_:  Option<String>,
+	types:  Option<Vec<String>>,
 	// by prev tx digest? --> actually just use tx toplevel query then
 	// TODO pagination, how does relay do it?
-	limit: Option<usize>,
-	skip: Option<usize>,
+	limit:  Option<usize>,
+	skip:   Option<usize>,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
@@ -47,25 +47,25 @@ struct ObjectArgsInput {
 pub struct SuiIndexedObject {
 	// TODO fix ID types
 	#[graphql(name = "id")]
-	pub _id: String,
-	pub version: u64,
-	pub digest: String,
+	pub _id:                    String,
+	pub version:                u64,
+	pub digest:                 String,
 	// TODO can this ever be anything different? see variant `Package`
 	#[serde(rename = "type")]
 	#[graphql(name = "type")]
-	pub type_: SuiIndexedType,
+	pub type_:                  SuiIndexedType,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub owner: Option<String>,
-	pub ownership_type: SuiOwnershipType,
+	pub owner:                  Option<String>,
+	pub ownership_type:         SuiOwnershipType,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub initial_shared_version: Option<u64>,
-	pub previous_transaction: String,
+	pub previous_transaction:   String,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub storage_rebate: Option<u64>,
+	pub storage_rebate:         Option<u64>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
-	pub fields: BTreeMap<String, SuiMoveValue>,
+	pub fields:                 BTreeMap<String, SuiMoveValue>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	pub bcs: Vec<u8>,
+	pub bcs:                    Vec<u8>,
 }
 
 #[derive(Union, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
@@ -129,7 +129,7 @@ pub struct SuiMoveVec {
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "MoveStruct")]
 pub struct SuiMoveStruct {
-	pub type_: String,
+	pub type_:  String,
 	pub fields: BTreeMap<String, SuiMoveValue>,
 }
 
@@ -145,12 +145,12 @@ pub enum SuiOwnershipType {
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
 #[graphql(name = "Type")]
 pub struct SuiIndexedType {
-	pub full: String,
-	pub package: String,
-	pub module: String,
+	pub full:     String,
+	pub package:  String,
+	pub module:   String,
 	#[serde(rename = "struct")]
 	#[graphql(name = "struct")]
-	pub struct_: String,
+	pub struct_:  String,
 	pub generics: Vec<String>,
 }
 
@@ -159,22 +159,22 @@ pub struct SuiIndexedType {
 pub struct SuiDynamicField {
 	// all relevant generic object fields
 	#[graphql(name = "id")]
-	pub _id: String,
-	pub version: u64,
+	pub _id:                  String,
+	pub version:              u64,
 	#[graphql(name = "type")]
-	pub type_: String,
-	pub digest: String,
+	pub type_:                String,
+	pub digest:               String,
 	pub previous_transaction: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub storage_rebate: Option<u64>,
+	pub storage_rebate:       Option<u64>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	pub bcs: Vec<u8>,
+	pub bcs:                  Vec<u8>,
 
 	// fields specifically tailored for dynamic fields
-	pub key_type: String,
+	pub key_type:   String,
 	pub value_type: String,
-	pub key: SuiMoveValue,
-	pub value: SuiMoveValue,
+	pub key:        SuiMoveValue,
+	pub value:      SuiMoveValue,
 }
 
 #[ComplexObject]
@@ -185,8 +185,7 @@ impl SuiIndexedObject {
 		limit: Option<usize>,
 		skip: Option<usize>,
 	) -> Vec<SuiDynamicField> {
-		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
+		let c: &Collection<Document> = ctx.data_unchecked();
 		c.find(
 			doc! {
 				"object.owner.ObjectOwner": self._id.clone(),
@@ -234,8 +233,7 @@ pub enum QueryError {
 #[Object]
 impl QueryRoot {
 	async fn object(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
-		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
+		let c: &Collection<Document> = ctx.data_unchecked();
 		match c
 			.find_one(
 				doc! {
@@ -255,19 +253,19 @@ impl QueryRoot {
 	}
 
 	async fn objects(&self, ctx: &Context<'_>, _args: ObjectArgsInput) -> Vec<String> {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		vec![format!("hello")]
 	}
 
 	// + owners
 	async fn owner(&self, ctx: &Context<'_>, address: ID) -> String {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		format!("hello {}", *address)
 	}
 
 	// + transactions
 	async fn transaction(&self, ctx: &Context<'_>, digest: ID) -> String {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		format!("hello {}", *digest)
 	}
 
@@ -358,7 +356,7 @@ fn parse_value(v: &Bson) -> SuiMoveValue {
 	if let Some(doc) = v.as_document() {
 		if doc.contains_key("type") && doc.contains_key("fields") {
 			SuiMoveValue::Struct(SuiMoveStruct {
-				type_: doc.get_str("type").unwrap().into(),
+				type_:  doc.get_str("type").unwrap().into(),
 				fields: parse_fields(doc),
 			})
 		} else if doc.contains_key("id") && doc.keys().count() == 1 {
@@ -412,14 +410,14 @@ async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
 	let env = std::env::var("APP_ENV").unwrap_or("dev".into());
 	let net = std::env::var("APP_NET").unwrap_or("testnet".into());
-	let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
-	let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
-	let mongo_collection = {
-		let base = std::env::var("APP_MONGO_COLLECTIONBASE").unwrap_or("objects".into());
-		format!("{}_{}_{}", env, net, base)
-	};
 
-	let db = {
+	let coll = {
+		let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
+		let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
+		let mongo_collection = {
+			let base = std::env::var("APP_MONGO_COLLECTIONBASE").unwrap_or("objects".into());
+			format!("{}_{}_{}", env, net, base)
+		};
 		let mut client_options = ClientOptions::parse(mongo_uri).await?;
 		// use zstd compression for messages
 		client_options.compressors = Some(vec![Compressor::Zstd { level: None }]);
@@ -457,11 +455,11 @@ async fn main() -> anyhow::Result<()> {
 		.await
 		.unwrap();
 		println!("ensured index exists: object type");
-		db
+		coll
 	};
 
 	let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
-		.data(db)
+		.data(coll)
 		// TODO activate later or on demand or something, don't need that noise for now
 		// .extension(async_graphql::extensions::ApolloTracing)
 		.limit_depth(10)
