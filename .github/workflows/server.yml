@@ -1,4 +1,4 @@
-name: (server) build & deploy
+name: "server: build & deploy (prod)"
 on:
   push:
     branches:

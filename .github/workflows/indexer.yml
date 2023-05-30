@@ -1,4 +1,4 @@
-name: (indexer) build & deploy
+name: "indexer: build & deploy (prod)"
 on:
   push:
     branches:
