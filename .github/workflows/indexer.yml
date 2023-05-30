@@ -14,7 +14,7 @@ env:
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
   REGISTRY: ghcr.io
-  TARGET: x86_64-unkown-linux-gnu
+  CARGO_BUILD_TARGET: x86_64-unkown-linux-gnu
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,8 +22,6 @@ jobs:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
-      - name: set default cargo target triple to ${{ env.TARGET }}
-        run: mkdir -p .cargo && echo '[build]\ntarget = "${{ env.TARGET }}"' >> .cargo/config.toml
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2023-05-15
