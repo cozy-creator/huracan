@@ -53,12 +53,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-#      - uses: docker/login-action@v2
-#        with:
-#          # see: https://github.com/superfly/flyctl/issues/104#issuecomment-614973806
-#          registry: ${{ env.FLY_REGISTRY }}
-#          username: ${{ secrets.FLY_API_TOKEN }}
-#          password: x
+      - uses: docker/login-action@v2
+        with:
+          # see: https://github.com/superfly/flyctl/issues/104#issuecomment-614973806
+          registry: ${{ env.FLY_REGISTRY }}
+          username: ${{ secrets.FLY_API_TOKEN }}
+          password: x
       - uses: docker/metadata-action@v4
         id: meta
         with:
@@ -74,9 +74,11 @@ jobs:
           build-args: BIN=${{ env.APP_BIN }}
           build-contexts: binaries=binaries
           push: true
-#          tags: ${{ steps.meta.outputs.tags }}
-          tags: ${{ env.IMAGE }}:test123
-#            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
+          # XXX ${{ steps.meta.outputs.labels }} would be available here, but not sure how to tell it to tag
+          # with a registry, let alone multiple; so we do it manually instead:
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
   deploy_testnet:
     name: deploy testnet
