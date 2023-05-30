@@ -75,10 +75,12 @@ jobs:
           build-contexts: binaries=binaries
           push: true
           # XXX ${{ steps.meta.outputs.labels }} would be available here, but not sure how to tell it to tag
-          # with a registry, let alone multiple; so we do it manually instead:
+          # with a registry, let alone multiple; so we do it manually instead
+          # for fly.io, we also need to push images for each of the apps we run there
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
-            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-testnet:${{ env.TAG }}
+            ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-mainnet:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
   deploy_testnet:
     name: deploy testnet
