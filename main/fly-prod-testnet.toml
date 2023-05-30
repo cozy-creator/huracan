@@ -1,4 +1,4 @@
-app = "sui-indexer-prod-testnet"
+app = "indexer-prod-testnet"
 primary_region = "fra"
 kill_signal = "SIGINT"
 kill_timeout = "30s"
