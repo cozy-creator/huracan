@@ -9,7 +9,8 @@ on:
       - 'config.yaml'
       - '!*.txt'
 env:
-  CRATE_DIR: main
+#  CRATE_DIR: main
+  CRATE_DIR: server
 #  APP_BIN: sui-indexer
   APP_BIN: server
   # XXX can't reference env context here, so we have to repeat ourselves
