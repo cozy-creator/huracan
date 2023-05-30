@@ -4,4 +4,4 @@ RUN apt-get update && apt-get -q -y install ca-certificates && rm -rf /var/lib/a
 WORKDIR /app
 COPY --from=binaries $BIN /usr/local/bin
 COPY ./config.yaml .
-ENTRYPOINT ["$BIN"]
+ENTRYPOINT "$BIN"
