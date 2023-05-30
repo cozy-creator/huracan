@@ -74,7 +74,8 @@ jobs:
           build-args: BIN=${{ env.APP_BIN }}
           build-contexts: binaries=binaries
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+#          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.IMAGE }}:test123
 #            ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
   deploy_testnet:
