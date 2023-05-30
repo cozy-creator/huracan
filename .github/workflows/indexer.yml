@@ -10,11 +10,11 @@ on:
       - '!*.txt'
 env:
   CRATE_DIR: main
-  APP_BIN: sui-indexer
+#  APP_BIN: sui-indexer
+  APP_BIN: server
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
   REGISTRY: ghcr.io
-  CARGO_BUILD_TARGET: x86_64-unkown-linux-gnu
 jobs:
   build:
     runs-on: ubuntu-latest
