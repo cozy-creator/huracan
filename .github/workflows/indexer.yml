@@ -14,6 +14,7 @@ env:
   # XXX can't reference env context here, so we have to repeat ourselves
   IMAGE: ghcr.io/${{ github.repository }}/sui-indexer
   REGISTRY: ghcr.io
+  TARGET: x86_64-unkown-linux-gnu
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,13 +22,15 @@ jobs:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
+      - name: set default cargo target triple to ${{ env.TARGET }}
+        run: mkdir -p .cargo && echo "${{ env.TARGET }}" >> .cargo/config.toml
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2023-05-15
       - uses: mozilla-actions/sccache-action@v0.0.3
         with:
-          version: 0.4.2
-      - run: cargo build --target x86_64-unknown-linux-gnu --bin ${{ env.APP_BIN }}
+          version: v0.4.2
+      - run: cargo build --bin ${{ env.APP_BIN }}
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
