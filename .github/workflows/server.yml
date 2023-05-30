@@ -73,8 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: testnet
-        run: flyctl deploy -i ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-testnet.toml
+      - run: flyctl deploy -i ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-${{ env.NET }}net:${{ env.TAG }} ${{ env.CRATE_DIR }} -c fly-prod-${{ env.NET }}net.toml
+        env:
+          NET: test
   deploy_mainnet:
     name: deploy mainnet
     runs-on: ubuntu-latest
@@ -82,7 +83,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: mainnet
-        run: flyctl deploy -i ${{ env.FLY_REGISTRY }}/${{ env.IMAGE }}:gha ${{ env.CRATE_DIR }} -c fly-prod-mainnet.toml
+      - run: flyctl deploy -i ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-${{ env.NET }}net:${{ env.TAG }} ${{ env.CRATE_DIR }} -c fly-prod-${{ env.NET }}net.toml
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NET: main
