@@ -3,7 +3,6 @@ name = "indexer"
 version = "0.2.0"
 edition = "2021"
 
-
 [dependencies]
 anyhow = "1.0"
 futures = "0.3"
