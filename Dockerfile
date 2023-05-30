@@ -1,4 +1,4 @@
-FROM debian:bullseye
+FROM ubuntu:latest
 ARG BIN
 RUN apt-get update && apt-get -q -y install ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
