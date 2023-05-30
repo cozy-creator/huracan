@@ -7,7 +7,6 @@ on:
       - 'server/**'
       - 'macros/**'
       - 'config.yaml'
-      - '*'
       - '!*.txt'
 env:
   CRATE_DIR: server

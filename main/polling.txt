@@ -13,4 +13,3 @@ polling in a desc direction then:
 
 we'd also need to keep track of all tx ids we've seen, collect them into a "checkpoint-cache", then on cp completion
 flush all tx ids from the cache that we know are part of that cp
-
