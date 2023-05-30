@@ -1,18 +1,18 @@
-name: (server) build & deploy
+name: (indexer) build & deploy
 on:
   push:
     branches:
       - gha
     paths:
-      - 'server/**'
+      - 'main/**'
       - 'macros/**'
       - 'config.yaml'
       - '!*.txt'
 env:
-  CRATE_DIR: server
-  APP_BIN: server
+  CRATE_DIR: main
+  APP_BIN: indexer
   # XXX can't reference env context here, so we have to repeat ourselves
-  IMAGE: ${{ github.repository }}/server
+  IMAGE: ${{ github.repository }}/indexer
   TAG: ${{ github.head_ref || github.ref_name }}
   REGISTRY: ghcr.io
   FLY_REGISTRY: registry.fly.io
@@ -23,6 +23,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: install deps
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang protobuf-compiler
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@master
         with:
