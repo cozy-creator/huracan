@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use actix_cors::Cors;
-use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
+use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result as WebResult};
 use async_graphql::{
 	http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object, Schema, SimpleObject,
 	Subscription, Union, ID,
@@ -515,6 +515,7 @@ async fn main() -> anyhow::Result<()> {
 					),
 			)
 			.service(index_graphiql)
+			.service(index_sandbox)
 	})
 	.bind(("0.0.0.0", 8000))?
 	.run()
@@ -528,4 +529,23 @@ async fn index_graphiql() -> WebResult<HttpResponse> {
 	Ok(HttpResponse::Ok()
 		.content_type("text/html; charset=utf-8")
 		.body(GraphiQLSource::build().endpoint(&endpoint).subscription_endpoint(&endpoint).finish()))
+}
+
+// apollo sandbox
+#[get("/sandbox")]
+async fn index_sandbox() -> impl Responder {
+	let endpoint = format!("{}/", API_PREFIX);
+	HttpResponse::Ok().content_type("text/html; charset=utf-8")
+		.body(r#"
+<div style="width: 100%; height: 100%;" id='embedded-sandbox'></div>
+<script src="https://embeddable-sandbox.cdn.apollographql.com/_latest/embeddable-sandbox.umd.production.min.js"></script> 
+<script>
+  new window.EmbeddedSandbox({
+    target: '#embedded-sandbox',
+    initialEndpoint: '{}',
+  });
+</script>
+"#
+			.replace("{}", &endpoint)
+		)
 }
