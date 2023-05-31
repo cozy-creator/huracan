@@ -2,7 +2,7 @@ name: "indexer: build & deploy (prod)"
 on:
   push:
     branches:
-      - gha
+      - main
     paths:
       - 'main/**'
       - 'macros/**'

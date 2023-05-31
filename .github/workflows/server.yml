@@ -2,7 +2,7 @@ name: "server: build & deploy (prod)"
 on:
   push:
     branches:
-      - gha
+      - main
     paths:
       - 'server/**'
       - 'macros/**'
