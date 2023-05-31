@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use actix_cors::Cors;
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result as WebResult};
 use async_graphql::{
-	http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object, Schema, SimpleObject,
+	http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Json, Object, Schema, SimpleObject,
 	Subscription, Union, ID,
 };
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
@@ -172,10 +172,12 @@ pub struct SuiDynamicField {
 	pub bcs:                  Vec<u8>,
 
 	// fields specifically tailored for dynamic fields
-	pub key_type:   String,
-	pub value_type: String,
-	pub key:        SuiMoveValue,
-	pub value:      SuiMoveValue,
+	pub key_type:    String,
+	pub value_type:  String,
+	pub key:         Json<SuiMoveValue>,
+	pub typed_key:   SuiMoveValue,
+	pub value:       Json<SuiMoveValue>,
+	pub typed_value: SuiMoveValue,
 }
 
 #[ComplexObject]
@@ -200,6 +202,8 @@ impl SuiIndexedObject {
 		.map_ok(|o| {
 			let key_type = o.type_.generics[0].clone();
 			let value_type = o.type_.generics[1].clone();
+			let k = o.fields.get("name").unwrap();
+			let v = o.fields.get("value").unwrap();
 			SuiDynamicField {
 				_id: o._id,
 				version: o.version,
@@ -210,8 +214,11 @@ impl SuiIndexedObject {
 				bcs: o.bcs,
 				key_type,
 				value_type,
-				key: o.fields.get("name").unwrap().clone(),
-				value: o.fields.get("value").unwrap().clone(),
+				// TODO(optim) we may want to instead use a resolver so we don't have to clone so much
+				key: Json(k.clone()),
+				typed_key: k.clone(),
+				value: Json(v.clone()),
+				typed_value: v.clone(),
 			}
 		})
 		.try_collect()
