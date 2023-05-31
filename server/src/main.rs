@@ -273,16 +273,16 @@ impl QueryRoot {
 	}
 
 	// + owners
-	async fn owner(&self, ctx: &Context<'_>, address: ID) -> String {
-		let _c: &Collection<Document> = ctx.data_unchecked();
-		format!("hello {}", *address)
-	}
+	// async fn owner(&self, ctx: &Context<'_>, address: ID) -> String {
+	// 	let _c: &Collection<Document> = ctx.data_unchecked();
+	// 	format!("hello {}", *address)
+	// }
 
 	// + transactions
-	async fn transaction(&self, ctx: &Context<'_>, digest: ID) -> String {
-		let _c: &Collection<Document> = ctx.data_unchecked();
-		format!("hello {}", *digest)
-	}
+	// async fn transaction(&self, ctx: &Context<'_>, digest: ID) -> String {
+	// 	let _c: &Collection<Document> = ctx.data_unchecked();
+	// 	format!("hello {}", *digest)
+	// }
 
 	// checkpoint/s?
 
