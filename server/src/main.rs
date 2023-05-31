@@ -457,6 +457,23 @@ async fn main() -> anyhow::Result<()> {
 		.await
 		.unwrap();
 		println!("ensured index exists: object owner");
+		// create index for object.owner.AddressOwner
+		coll.create_index(
+			IndexModel::builder()
+				.keys(doc! {
+					"object.owner.AddressOwner": 1,
+				})
+				.options(Some(
+					IndexOptions::builder()
+						.partial_filter_expression(doc! {"object.owner.AddressOwner": doc!{"$exists": true}})
+						.build(),
+				))
+				.build(),
+			None,
+		)
+		.await
+		.unwrap();
+		println!("ensured index exists: address owner");
 		// create index for object.type
 		coll.create_index(
 			IndexModel::builder()
