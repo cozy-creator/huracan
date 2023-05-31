@@ -15,7 +15,7 @@ use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
 	options::{ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
-	Collection, Database, IndexModel,
+	Collection, IndexModel,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -185,8 +185,7 @@ impl SuiIndexedObject {
 		limit: Option<usize>,
 		skip: Option<usize>,
 	) -> Vec<SuiDynamicField> {
-		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
+		let c: &Collection<Document> = ctx.data_unchecked();
 		c.find(
 			doc! {
 				"object.owner.ObjectOwner": self._id.clone(),
@@ -234,8 +233,7 @@ pub enum QueryError {
 #[Object]
 impl QueryRoot {
 	async fn object(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
-		let db: &Database = ctx.data_unchecked();
-		let c: Collection<Document> = db.collection("dev_testnet_wrappingtest2");
+		let c: &Collection<Document> = ctx.data_unchecked();
 		match c
 			.find_one(
 				doc! {
@@ -255,19 +253,19 @@ impl QueryRoot {
 	}
 
 	async fn objects(&self, ctx: &Context<'_>, _args: ObjectArgsInput) -> Vec<String> {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		vec![format!("hello")]
 	}
 
 	// + owners
 	async fn owner(&self, ctx: &Context<'_>, address: ID) -> String {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		format!("hello {}", *address)
 	}
 
 	// + transactions
 	async fn transaction(&self, ctx: &Context<'_>, digest: ID) -> String {
-		let _db: &Database = ctx.data_unchecked();
+		let _c: &Collection<Document> = ctx.data_unchecked();
 		format!("hello {}", *digest)
 	}
 
@@ -410,11 +408,16 @@ const API_PREFIX: &'static str = "/api/v1";
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
-	let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
-	let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
-	let mongo_collection = std::env::var("APP_MONGO_COLLECTION").unwrap_or("dev_testnet_wrappingtest2".into());
+	let env = std::env::var("APP_ENV").unwrap_or("dev".into());
+	let net = std::env::var("APP_NET").unwrap_or("testnet".into());
 
-	let db = {
+	let coll = {
+		let mongo_uri = std::env::var("APP_MONGO_URI").unwrap();
+		let mongo_db = std::env::var("APP_MONGO_DB").unwrap_or("sui".into());
+		let mongo_collection = {
+			let base = std::env::var("APP_MONGO_COLLECTIONBASE").unwrap_or("objects".into());
+			format!("{}_{}_{}", env, net, base)
+		};
 		let mut client_options = ClientOptions::parse(mongo_uri).await?;
 		// use zstd compression for messages
 		client_options.compressors = Some(vec![Compressor::Zstd { level: None }]);
@@ -452,11 +455,11 @@ async fn main() -> anyhow::Result<()> {
 		.await
 		.unwrap();
 		println!("ensured index exists: object type");
-		db
+		coll
 	};
 
 	let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
-		.data(db)
+		.data(coll)
 		// TODO activate later or on demand or something, don't need that noise for now
 		// .extension(async_graphql::extensions::ApolloTracing)
 		.limit_depth(10)
@@ -479,7 +482,7 @@ async fn main() -> anyhow::Result<()> {
 			)
 			.service(index_graphiql)
 	})
-	.bind(("127.0.0.1", 8000))?
+	.bind(("0.0.0.0", 8000))?
 	.run()
 	.await?)
 }
