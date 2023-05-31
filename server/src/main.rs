@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use actix_cors::Cors;
 use actix_web::{get, guard, post, web, App, HttpRequest, HttpResponse, HttpServer, Result as WebResult};
 use async_graphql::{
 	http::GraphiQLSource, ComplexObject, Context, EmptyMutation, Enum, InputObject, Object, Schema, SimpleObject,
@@ -502,6 +503,7 @@ async fn main() -> anyhow::Result<()> {
 
 	Ok(HttpServer::new(move || {
 		App::new()
+			.wrap(Cors::default().allow_any_origin().allow_any_method().allow_any_header())
 			.app_data(Data::new(schema.clone()))
 			.service(
 				web::scope(API_PREFIX)
