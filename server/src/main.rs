@@ -27,9 +27,9 @@ struct QueryRoot;
 
 #[derive(InputObject)]
 struct ObjectArgsInput {
-	ids:    Option<Vec<ID>>,
-	owner:  Option<ID>,
-	owners: Option<Vec<ID>>,
+	ids:    Option<Vec<String>>,
+	owner:  Option<String>,
+	owners: Option<Vec<String>>,
 	// could be just $package, or $p::$module or $p::$m::$struct or $p::$m::$s<$generics...>
 	// we parse them, translate them into access via indexes
 	#[graphql(name = "type")]
@@ -224,37 +224,52 @@ impl SuiIndexedObject {
 	}
 }
 
-#[derive(Error, Debug, Serialize, Deserialize)]
+#[derive(Error, Debug, Serialize)]
 pub enum QueryError {
 	#[error("internal DB error: {0}")]
 	DbError(String),
+	#[error("invalid query")]
+	InvalidQuery,
+}
+
+impl From<mongodb::error::Error> for QueryError {
+	fn from(value: mongodb::error::Error) -> Self {
+		QueryError::DbError(format!("{:?}", value))
+	}
 }
 
 #[Object]
 impl QueryRoot {
-	async fn object(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<Option<SuiIndexedObject>, QueryError> {
+	async fn object(&self, ctx: &Context<'_>, id: ID) -> Result<Option<SuiIndexedObject>, QueryError> {
 		let c: &Collection<Document> = ctx.data_unchecked();
-		match c
-			.find_one(
-				doc! {
-					"_id": id.to_string(),
-				},
-				None,
-			)
-			.await
-		{
-			Ok(Some(o)) => Ok(Some(parse(&o))),
-			Ok(None) => Ok(None),
-			Err(e) => {
-				// TODO handle error variants in detail, don't just pass mongo errors through to user
-				Err(QueryError::DbError(format!("{:?}", e)))
-			}
-		}
+		let res = c.find_one(doc! {"_id": id.to_string()}, None).await?.map(|o| parse(&o));
+		Ok(res)
 	}
 
-	async fn objects(&self, ctx: &Context<'_>, _args: ObjectArgsInput) -> Vec<String> {
-		let _c: &Collection<Document> = ctx.data_unchecked();
-		vec![format!("hello")]
+	async fn objects(&self, ctx: &Context<'_>, args: ObjectArgsInput) -> Result<Vec<SuiIndexedObject>, QueryError> {
+		let c: &Collection<Document> = ctx.data_unchecked();
+		let opts =
+			Some(FindOptions::builder().limit(args.limit.map(|l| l as i64)).skip(args.skip.map(|l| l as u64)).build());
+		match if let Some(ids) = args.ids {
+			c.find(doc! {"_id": doc! {"$in": ids }}, opts).await
+		} else if let Some(owner) = args.owner {
+			c.find(doc! { "$or": vec![doc! {"object.owner.AddressOwner": doc! {"$in": vec![owner.clone()] }}, doc! {"object.owner.ObjectOwner": doc! {"$in": vec![owner] }} ]}, opts).await
+		} else if let Some(owners) = args.owners {
+			c.find(doc! { "$or": vec![doc! {"object.owner.AddressOwner": doc! {"$in": owners.clone() }}, doc! {"object.owner.ObjectOwner": doc! {"$in": owners }} ]}, opts).await
+		} else if let Some(ty) = args.type_ {
+			c.find(doc! {"object.type": doc! {"$regex": format!("^{}", ty) }}, opts).await
+		} else if let Some(types) = args.types {
+			c.find(
+				doc! {"object.type": doc! {"$regex": types.iter().map(|ty| format!("^{}", ty)).collect::<Vec<_>>().join("|") }},
+				opts,
+			)
+			.await
+		} else {
+			return Err(QueryError::InvalidQuery)
+		} {
+			Ok(items) => Ok(items.map_ok(|o| parse(&o)).try_collect().await?),
+			Err(e) => Err(QueryError::DbError(format!("{:?}", e))),
+		}
 	}
 
 	// + owners
