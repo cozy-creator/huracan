@@ -23,7 +23,7 @@ use sui_types::{
 };
 use tokio::{
 	pin,
-	sync::mpsc::{Sender as TSender, UnboundedReceiver, UnboundedSender},
+	sync::mpsc::{Receiver as TReceiver, Sender as TSender, UnboundedReceiver, UnboundedSender},
 	task::JoinHandle,
 };
 
@@ -124,16 +124,40 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
-			let start_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+			let start_cp = loop {
+				let cp = match sui.get_latest_checkpoint_sequence_number().await {
+					Ok(cp) => cp as u64,
+					Err(e) => {
+						warn!("failed getting latest checkpoint: {}", e);
+						continue
+					}
+				};
+				break cp
+			};
 			let mut last_microscan_cp = start_cp;
 			let mut txns_already_processed = BTreeMap::new();
+
+			let mut last_poll = Instant::now().checked_sub(Duration::from_millis(cfg.pollintervalms)).unwrap();
 
 			loop {
 				if stop.load(Relaxed) {
 					break
 				}
 
-				let latest_cp = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+				let wait_ms = cfg.pollintervalms.saturating_sub(last_poll.elapsed().as_millis() as u64);
+				if wait_ms > 0 {
+					tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+				}
+
+				let latest_cp = match sui.get_latest_checkpoint_sequence_number().await {
+					Ok(cp) => cp as u64,
+					Err(e) => {
+						warn!("failed getting latest checkpoint: {}", e);
+						continue
+					}
+				};
+				last_poll = Instant::now();
+
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
 				//		so we don't have to ask MongoDB here
 				// get last fully completed cp as a starting point for computing how far we've fallen behind
@@ -167,6 +191,11 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						last_microscan_cp = max_cp;
 					}
 					// check again
+					continue
+				}
+
+				if latest_cp == last_microscan_cp {
+					// no new checkpoint available, try again
 					continue
 				}
 
@@ -219,7 +248,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				txns_already_processed.drain_filter(|_, v| latest_cp as i64 - v.abs() > 120);
 
 				// spawn the microscan
-				let mut scan_items = spawn_microscan(latest_cp, last_microscan_cp, &cfg, sui.clone()).await;
+				let (mut scan_items, mut microscan_cp_control_rx) =
+					spawn_microscan(latest_cp, last_microscan_cp, &cfg, sui.clone()).await;
 
 				// process all items it returns, to figure out which ones may have been missed by the polling strategy
 				// and calculate and send off checkpoint control messages as we go, too
@@ -281,6 +311,18 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					}
 				}
 
+				// final cp completion was not sent, as there was no cp change to trigger it
+				if cur_cp != 0 {
+					ll_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.ok();
+				}
+
+				// now store completions for all cps we skipped above due to not receiving any items for
+				while let Some((cp, num_items)) = microscan_cp_control_rx.recv().await {
+					if num_items == 0 {
+						ll_cp_control_tx.send((cp, num_items)).await.ok();
+					}
+				}
+
 				// we're done, the microscan is complete
 				// (at least the frontend; backend items may still be processing in the background)
 				last_microscan_cp = latest_cp;
@@ -310,15 +352,15 @@ async fn spawn_microscan(
 	stop_at_cp: u64,
 	cfg: &AppConfig,
 	sui: ClientPool,
-) -> ACReceiver<(Option<TransactionDigest>, ObjectItem)> {
+) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, TReceiver<(CheckpointSequenceNumber, u32)>) {
 	let default_num_workers = sui.configs.len();
 	let num_step1_workers = cfg.lowlatency.workers.step1.unwrap_or(default_num_workers);
-	info!("[microscan] workers: {}", num_step1_workers);
 
 	// turn our last cp into a fake completed range, which will make the scan stop
 	let completed_checkpoint_ranges = vec![(stop_at_cp, 0)];
 
 	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
+	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.lowlatency.queuebuffers.cpcompletions);
 	let step_size = num_step1_workers;
 	let mut handles = Vec::with_capacity(num_step1_workers);
 	for partition in 0..num_step1_workers {
@@ -331,11 +373,11 @@ async fn spawn_microscan(
 			sui.clone(),
 			None,
 			items_tx.clone(),
-			None,
+			cp_control_tx.clone(),
 		)));
 	}
 
-	items_rx
+	(items_rx, cp_control_rx)
 }
 
 async fn spawn_pipeline_tail(
@@ -424,6 +466,10 @@ async fn spawn_pipeline_tail(
 				let (cp, v) = tokio::select! {
 					Some((status, item)) = last_rx.recv() => {
 						let cp = item.cp;
+						if cp == 0 {
+							// ignore, not really a checkpoint
+							continue;
+						}
 						if let StepStatus::Err = status {
 							retries.send(item).await.expect("failed to send retry message to pulsar!");
 						}
@@ -438,7 +484,7 @@ async fn spawn_pipeline_tail(
 				if *v == 0 {
 					mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
 					completions_left.remove(&cp);
-					max_cp_completed = max_cp_completed.max(cp as u64);
+					max_cp_completed = max_cp_completed.max(cp);
 				}
 			}
 			max_cp_completed
@@ -501,7 +547,7 @@ async fn spawn_fullscan_pipeline(
 				sui.clone(),
 				Some(db.clone()),
 				object_ids_tx.clone(),
-				Some(cp_control_tx.clone()),
+				cp_control_tx.clone(),
 			)));
 		}
 		drop(object_ids_tx);
@@ -524,7 +570,7 @@ async fn do_scan(
 	mut sui: ClientPool,
 	db: Option<Arc<DBWithThreadMode<SingleThreaded>>>,
 	object_ids_tx: ACSender<(Option<TransactionDigest>, ObjectItem)>,
-	cp_control_tx: Option<TSender<(CheckpointSequenceNumber, u32)>>,
+	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
 ) {
 	let stop = ctrl_c_bool();
 	let mut completed_iter = completed_checkpoint_ranges.iter();
@@ -622,15 +668,11 @@ async fn do_scan(
 					if !page.has_next_page {
 						// we're done with this cp
 						// send control message about number of expected object tasks from this cp
-						if let Some(cp_control_tx) = &cp_control_tx {
-							cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
-						}
+						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else if page.next_cursor.is_none() {
 						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
-						if let Some(cp_control_tx) = &cp_control_tx {
-							cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
-						}
+						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else {
 						cursor = page.next_cursor;
