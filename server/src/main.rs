@@ -522,7 +522,10 @@ async fn main() -> anyhow::Result<()> {
 					),
 			)
 			.service(index_graphiql)
-			.service(index_sandbox)
+			// make sandbox available at / and /sandbox and /apollo
+			.service(resource("/").to(index_sandbox))
+			.service(resource("/sandbox").to(index_sandbox))
+			.service(resource("/apollo").to(index_sandbox))
 	})
 	.bind(("0.0.0.0", 8000))?
 	.run()
@@ -530,7 +533,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // graphiql
-#[get("/")]
+#[get("/graphiql")]
 async fn index_graphiql() -> WebResult<HttpResponse> {
 	let endpoint = format!("{}/", API_PREFIX);
 	Ok(HttpResponse::Ok()
@@ -539,7 +542,6 @@ async fn index_graphiql() -> WebResult<HttpResponse> {
 }
 
 // apollo sandbox
-#[get("/sandbox")]
 async fn index_sandbox() -> impl Responder {
 	let endpoint = format!("{}/", API_PREFIX);
 	HttpResponse::Ok().content_type("text/html; charset=utf-8")
