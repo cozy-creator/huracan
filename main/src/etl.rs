@@ -419,29 +419,24 @@ async fn spawn_pipeline_tail(
 			let mut completions_left = HashMap::new();
 			let mut max_cp_completed = 0u64;
 			loop {
-				tokio::select! {
+				let (cp, v) = tokio::select! {
 					Some((status, item)) = last_rx.recv() => {
 						let cp = item.cp;
 						if let StepStatus::Err = status {
 							retries.send(item).await.expect("failed to send retry message to pulsar!");
 						}
-						let v = completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64);
-						if *v == 0 {
-							mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
-							completions_left.remove(&cp);
-							max_cp_completed = max_cp_completed.max(cp as u64);
-						}
+						(cp, completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64))
 					},
 					Some((cp, num_items)) = cp_control_rx.recv() => {
-						let v = completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64);
-						if *v == 0 {
-							mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
-							completions_left.remove(&cp);
-							max_cp_completed = max_cp_completed.max(cp as u64);
-						}
+						(cp, completions_left.entry(cp).and_modify(|n| *n += num_items as i64).or_insert(num_items as i64))
 					},
 					// if both branches return None, we're complete
 					else => break,
+				};
+				if *v == 0 {
+					mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
+					completions_left.remove(&cp);
+					max_cp_completed = max_cp_completed.max(cp as u64);
 				}
 			}
 			max_cp_completed
