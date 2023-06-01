@@ -1,4 +1,4 @@
 /target
 /.local
 .env
-fullscan.tmp.db
+fullscan.tmp.db*
