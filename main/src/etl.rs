@@ -124,7 +124,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
-			let start_cp = loop {
+			let start_cp_for_offset = loop {
 				let cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
@@ -212,7 +212,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				// to poll_items_transactions, so we can do regular cleanup and prevent the collection
 				// from growing indefinitely
 				// needs to be at >= 1 so it works with our approach below
-				let cp_offset_marker = (latest_cp - start_cp).max(1) as i64;
+				let cp_offset_marker = (latest_cp - start_cp_for_offset).max(1) as i64;
 				loop {
 					tokio::select! {
 						Some(tx) = poll_items_transactions.recv() => {
