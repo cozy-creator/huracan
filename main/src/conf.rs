@@ -116,6 +116,7 @@ pub struct AppConfig {
 	pub throughput:          PipelineConfig,
 	pub lowlatency:          PipelineConfig,
 	pub fallbehindthreshold: usize,
+	pub pausepolloncatchup:  bool,
 	pub pollintervalms:      u64,
 	pub mongo:               MongoConfig,
 	pub pulsar:              PulsarConfig,

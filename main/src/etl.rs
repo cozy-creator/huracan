@@ -144,8 +144,10 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.unwrap()
 					.map(|cp| cp._id);
 				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.fallbehindthreshold as u64 {
-					// ask low-latency work to pause
-					pause_ll.store(250, Relaxed);
+					if cfg.pausepolloncatchup {
+						// ask low-latency work to pause
+						pause_ll.store(250, Relaxed);
+					}
 					// run fullscan
 					let (step1completed_rx, handle) =
 						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone()).await.unwrap();

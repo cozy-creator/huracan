@@ -4,6 +4,7 @@ rocksdbfile: ./fullscan.tmp.db
 
 # how many checkpoints we need to be behind to change into throughput mode for catching up quickly
 fallbehindthreshold: 120
+pausepolloncatchup: false
 pollintervalms: 100
 
 throughput:
