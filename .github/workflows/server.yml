@@ -48,11 +48,6 @@ jobs:
         with:
           name: binaries
           path: binaries
-#      - uses: docker/login-action@v2
-#        with:
-#          registry: ${{ env.REGISTRY }}
-#          username: ${{ github.actor }}
-#          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/login-action@v2
         with:
           # see: https://github.com/superfly/flyctl/issues/104#issuecomment-614973806
@@ -78,7 +73,6 @@ jobs:
           # with a registry, let alone multiple; so we do it manually instead
           # for fly.io, we also need to push images for each of the apps we run there
           tags: |
-#            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ env.TAG }}
             ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-testnet:${{ env.TAG }}
             ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-mainnet:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
