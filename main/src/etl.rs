@@ -134,7 +134,13 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				};
 				break cp
 			};
-			let mut last_microscan_cp = start_cp;
+			// run first microscan from last known completed checkpoint
+			let mut last_microscan_cp = coll
+				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
+				.await
+				.unwrap()
+				.map(|cp| cp._id)
+				.unwrap_or(0);
 			let mut txns_already_processed = BTreeMap::new();
 
 			let mut last_poll = Instant::now().checked_sub(Duration::from_millis(cfg.pollintervalms)).unwrap();
