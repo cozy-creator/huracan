@@ -7,7 +7,10 @@ use crate::_prelude::*;
 #[derive(Serialize, Deserialize)]
 pub struct Checkpoint {
 	// TODO mongo u64 issue
-	pub _id: u64,
+	pub _id:  u64,
+	// marks the oldest checkpoint we need to look at, with the assurance that every checkpoint
+	// older than this one has already been completed, even if we may not store that info otherwise
+	pub stop: Option<bool>,
 }
 
 pub fn mongo_collection_name(cfg: &AppConfig, suffix: &str) -> String {

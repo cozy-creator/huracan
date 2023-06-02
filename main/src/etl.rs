@@ -547,8 +547,32 @@ async fn spawn_fullscan_pipeline(
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
 		let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
-		let mut cpids = coll.find(None, None).await.unwrap().map(|r| r.unwrap()._id).collect::<Vec<_>>().await;
-		make_descending_ranges(cpids)
+		let mut stop_at = 0;
+		let mut cpids = coll
+			.find(None, None)
+			.await
+			.unwrap()
+			.map(|r| {
+				let cp = r.unwrap();
+				if cp.stop.unwrap_or(false) {
+					stop_at = stop_at.max(cp._id);
+				}
+				cp._id
+			})
+			.collect::<Vec<_>>()
+			.await;
+		// ensure that we actually stop there
+		if stop_at > 0 {
+			cpids.sort_unstable();
+			// chop off all checkpoints lower than stop_at
+			cpids.drain_filter(|cp| *cp < stop_at);
+			let mut ranges = make_descending_ranges(cpids);
+			// add where to stop as the last range item
+			ranges.push((stop_at, 0));
+			ranges
+		} else {
+			make_descending_ranges(cpids)
+		}
 	};
 
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
