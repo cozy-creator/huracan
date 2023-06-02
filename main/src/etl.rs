@@ -68,6 +68,14 @@ impl Display for StepStatus {
 	}
 }
 
+pub async fn run_fullscan_only(cfg: &AppConfig) -> Result<()> {
+	let sui = cfg.sui().await?;
+	let pulsar = crate::pulsar::create(&cfg).await?;
+	let (_, handle) = spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui, pulsar).await?;
+	handle.await?;
+	Ok(())
+}
+
 pub async fn run(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;

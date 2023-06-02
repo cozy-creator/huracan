@@ -32,7 +32,11 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	etl::run(&cfg).await.unwrap();
+	if std::env::var("FULLSCAN_ONLY").is_ok() {
+		etl::run_fullscan_only(&cfg).await?;
+	} else {
+		etl::run(&cfg).await.unwrap();
+	}
 
 	Ok(())
 }
