@@ -29,6 +29,7 @@ throughput:
     zstdlevel: 5
   step1retries: 3
   step1retrytimeoutms: 500
+  tracklatency: false
 
 lowlatency:
   queuebuffers:
@@ -54,6 +55,7 @@ lowlatency:
     zstdlevel: 1
   step1retries: 3
   step1retrytimeoutms: 10
+  tracklatency: true
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file

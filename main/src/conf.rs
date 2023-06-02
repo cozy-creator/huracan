@@ -20,6 +20,7 @@ pub struct PipelineConfig {
 	pub mongo:               MongoPipelineStepConfig,
 	pub step1retries:        usize,
 	pub step1retrytimeoutms: u64,
+	pub tracklatency:        bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -10,6 +10,7 @@ use anyhow::Result;
 use async_channel::{Receiver as ACReceiver, Sender as ACSender};
 use async_stream::stream;
 use bson::{doc, Document};
+use chrono::Utc;
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::{options::FindOneOptions, Database};
@@ -43,11 +44,13 @@ const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectItem {
-	pub cp:       CheckpointSequenceNumber,
-	pub deletion: bool,
-	pub id:       ObjectID,
-	pub version:  SequenceNumber,
-	pub bytes:    Vec<u8>,
+	pub cp:            CheckpointSequenceNumber,
+	pub deletion:      bool,
+	pub id:            ObjectID,
+	pub version:       SequenceNumber,
+	pub ts_sui:        Option<u64>,
+	pub ts_first_seen: u64,
+	pub bytes:         Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -470,7 +473,10 @@ async fn spawn_pipeline_tail(
 			let mut max_cp_completed = 0u64;
 			loop {
 				let (cp, v) = tokio::select! {
-					Some((status, item)) = last_rx.recv() => {
+					Some((status, item, completed_at)) = last_rx.recv() => {
+						if let (Some(ts_sui), Some(completed)) = (item.ts_sui, completed_at) {
+							info!("latency: {}ms // {}ms", completed - item.ts_first_seen, completed - ts_sui);
+						}
 						let cp = item.cp;
 						if cp == 0 {
 							// ignore, not really a checkpoint
@@ -628,6 +634,7 @@ async fn do_scan(
 		let mut num_objects = 0u32;
 
 		loop {
+			let call_start_ts = Utc::now().timestamp_millis() as u64;
 			let page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
 			match page {
 				Ok(page) => {
@@ -660,6 +667,8 @@ async fn do_scan(
 											deletion: deleted,
 											id: object_id,
 											version,
+											ts_sui: block.timestamp_ms,
+											ts_first_seen: call_start_ts,
 											bytes: Default::default(),
 										},
 									))
@@ -736,6 +745,10 @@ async fn do_poll(
 			}
 		}
 		let call_start = Instant::now();
+		// for latency tracking, to make it a little easier, we're adding half of the time spent waiting since the last poll
+		// since that's the average of when a tx will have been added to the chain in the meantime
+		let latency_first_seen_ms =
+			Utc::now().timestamp_millis() as u64 + last_poll.elapsed().as_millis().div_ceil(2) as u64;
 		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
 			Ok(mut page) => {
 				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
@@ -769,7 +782,15 @@ async fn do_poll(
 						if items
 							.send((
 								tx_digest_once.take(),
-								ObjectItem { cp: 0, deletion, id, version, bytes: Default::default() },
+								ObjectItem {
+									cp: 0,
+									deletion,
+									id,
+									version,
+									ts_sui: block.timestamp_ms,
+									ts_first_seen: latency_first_seen_ms,
+									bytes: Default::default(),
+								},
 							))
 							.await
 							.is_err()
@@ -858,7 +879,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 	pc: PipelineConfig,
 	stream: S,
 	db: Database,
-	last_tx: TSender<(StepStatus, ObjectItem)>,
+	last_tx: TSender<(StepStatus, ObjectItem, Option<u64>)>,
 ) {
 	// e.g. prod_testnet_objects
 	let collection = mongo::mongo_collection_name(&cfg, "");
@@ -937,15 +958,19 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 							res.get_array("writeErrors").unwrap()
 						);
 					}
+
+					let completed_at = pc.tracklatency.then(|| Utc::now().timestamp_millis() as u64);
+					for item in chunk {
+						last_tx.send((StepStatus::Ok, item, completed_at)).await.unwrap();
+					}
+
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
 					let missing = n - (inserted + modified as usize);
 					let missing_info =
 						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
-					for item in chunk {
-						last_tx.send((StepStatus::Ok, item)).await.unwrap();
-					}
+
 					break
 				}
 				Err(err) => {
