@@ -471,11 +471,17 @@ async fn spawn_pipeline_tail(
 			let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await.unwrap();
 			let mut completions_left = HashMap::new();
 			let mut max_cp_completed = 0u64;
+			let mut last_latency = 0;
 			loop {
 				let (cp, v) = tokio::select! {
 					Some((status, item, completed_at)) = last_rx.recv() => {
 						if let (Some(ts_sui), Some(completed)) = (item.ts_sui, completed_at) {
-							info!("latency: {}ms // {}ms", completed - item.ts_first_seen, completed - ts_sui);
+							let latency = completed - item.ts_first_seen;
+							// we don't want to log the same value more than once consecutively
+							if latency != last_latency {
+								info!("latency: {}ms // {}ms", latency, completed - ts_sui);
+								last_latency = latency;
+							}
 						}
 						let cp = item.cp;
 						if cp == 0 {
