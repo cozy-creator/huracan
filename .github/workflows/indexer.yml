@@ -78,6 +78,10 @@ jobs:
             ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-testnet:${{ env.TAG }}
             ${{ env.FLY_REGISTRY }}/${{ env.APP_BIN }}-prod-mainnet:${{ env.TAG }}
           labels: ${{ steps.meta.outputs.labels }}
+      # cleanup: remove artifact we've used successfully
+      - uses: geekyeggo/delete-artifact@v2
+        with:
+          name: binaries
   deploy_testnet:
     name: deploy testnet
     runs-on: ubuntu-latest
