@@ -204,6 +204,10 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 							pause.store(0, Relaxed);
 						}
 					});
+					// TODO I think instead of waiting for the fullscan to finish we just want to get
+					//		the max cp returned when spawning, remember if the thing is currently still
+					//		running, and if so, just don't spawn it again... while continuing to run
+					//		the normal pipeline
 					let max_cp = handle.await.unwrap();
 					if max_cp > 0 {
 						// update all reference checkpoints
@@ -696,6 +700,8 @@ async fn do_scan(
 									// known?
 									if let None = db.get_pinned(k).unwrap() {
 										// no, new one, so we mark it as known
+										// FIXME put version so we can ensure only older versions are skipped
+										//	     in case we process things out of order
 										db.put(k, Vec::new()).unwrap();
 									// keep going below
 									} else {

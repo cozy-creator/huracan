@@ -146,6 +146,11 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 pub fn parse_change(change: SuiObjectChange) -> Option<(ObjectID, SequenceNumber, bool)> {
 	use sui_sdk::rpc_types::ObjectChange::*;
 	Some(match change {
+		// TODO what about Wrapped and Transferred? at least when walking towards genesis we want to know
+		//		about an object asap for indexing its latest state or ignoring it for the rest of the walk
+		// TODO here we can also get the struct tag and filter out some types we already know we're not interested in (e.g. Clock)
+		// TODO Wrapped + Transferred: I think we can infer some situations where the obj is no longer accessible
+		//		externally and can mark it as such, without having to make another query
 		Created { object_id, version, .. } | Mutated { object_id, version, .. } => (object_id, version, false),
 		Deleted { object_id, version, .. } => (object_id, version, true),
 		_ => return None,
