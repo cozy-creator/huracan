@@ -68,10 +68,10 @@ impl Display for StepStatus {
 	}
 }
 
-pub async fn run_fullscan_only(cfg: &AppConfig) -> Result<()> {
+pub async fn run_fullscan_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
-	let (_, handle) = spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui, pulsar).await?;
+	let (_, handle) = spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui, pulsar, start_checkpoint).await?;
 	handle.await?;
 	Ok(())
 }
@@ -191,7 +191,9 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					}
 					// run fullscan
 					let (step1completed_rx, handle) =
-						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone()).await.unwrap();
+						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone(), None)
+							.await
+							.unwrap();
 					// continue low-latency work as soon as step 1 of the fullscan completes,
 					// so we incur as little unnecessary latency as possible while just waiting for
 					// some remaining items to be completed
@@ -526,6 +528,7 @@ async fn spawn_fullscan_pipeline(
 	pc: &PipelineConfig,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
+	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	let db = {
 		// give each pipeline its own rocksdb instance
@@ -538,7 +541,11 @@ async fn spawn_fullscan_pipeline(
 
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
-	let checkpoint_max = sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+	let checkpoint_max = if let Some(start) = start_checkpoint {
+		start
+	} else {
+		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
+	};
 
 	let default_num_workers = sui.configs.len();
 	let num_step1_workers = pc.workers.step1.unwrap_or(default_num_workers);
