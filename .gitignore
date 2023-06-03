@@ -2,3 +2,4 @@
 /.local
 .env
 fullscan.tmp.db*
+.idea
