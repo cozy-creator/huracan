@@ -741,6 +741,7 @@ async fn do_scan(
 				Err(err) => {
 					if retries_left == 0 {
 						warn!(error = ?err, "Exhausted all retries fetching step 1 data, leaving checkpoint {} unfinished for this run", cp);
+						break
 					}
 					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
