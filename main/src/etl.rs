@@ -51,7 +51,15 @@ pub struct ObjectItem {
 	pub version:       SequenceNumber,
 	pub ts_sui:        Option<u64>,
 	pub ts_first_seen: u64,
+	pub ingested_via:  IngestRoute,
 	pub bytes:         Vec<u8>,
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub enum IngestRoute {
+	Poll,
+	Microscan,
+	Fullscan,
 }
 
 #[derive(Debug)]
@@ -390,6 +398,7 @@ async fn spawn_microscan(
 	for partition in 0..num_step1_workers {
 		handles.push(tokio::spawn(do_scan(
 			cfg.lowlatency.clone(),
+			IngestRoute::Microscan,
 			checkpoint_max,
 			completed_checkpoint_ranges.clone(),
 			step_size,
@@ -494,7 +503,12 @@ async fn spawn_pipeline_tail(
 							let latency = completed - item.ts_first_seen;
 							// we don't want to log the same value more than once consecutively
 							if latency != last_latency {
-								info!("latency: {}ms // {}ms", latency, completed - ts_sui);
+								let source = match item.ingested_via {
+									IngestRoute::Poll => "P",
+									IngestRoute::Microscan => "M",
+									IngestRoute::Fullscan => "F",
+								};
+								info!("[{}] {}ms // {}ms", source, latency, completed - ts_sui);
 								last_latency = latency;
 							}
 						}
@@ -602,6 +616,7 @@ async fn spawn_fullscan_pipeline(
 		for partition in 0..num_step1_workers {
 			handles.push(tokio::spawn(do_scan(
 				pc.clone(),
+				IngestRoute::Fullscan,
 				checkpoint_max,
 				completed_checkpoint_ranges.clone(),
 				step_size,
@@ -625,6 +640,7 @@ async fn spawn_fullscan_pipeline(
 
 async fn do_scan(
 	pc: PipelineConfig,
+	ingest_route: IngestRoute,
 	checkpoint_max: u64,
 	completed_checkpoint_ranges: Vec<(u64, u64)>,
 	step_size: usize,
@@ -721,6 +737,7 @@ async fn do_scan(
 											version,
 											ts_sui: block.timestamp_ms,
 											ts_first_seen: call_start_ts,
+											ingested_via: ingest_route,
 											bytes: Default::default(),
 										},
 									))
@@ -842,6 +859,7 @@ async fn do_poll(
 									version,
 									ts_sui: block.timestamp_ms,
 									ts_first_seen: latency_first_seen_ms,
+									ingested_via: IngestRoute::Poll,
 									bytes: Default::default(),
 								},
 							))
