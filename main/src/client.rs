@@ -129,6 +129,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 			DisplayError { error } => {
 				warn!(object_id = ?id, "object not available: display error: {}", error);
 			}
+			e @ DynamicFieldNotFound { .. } => {
+				panic!("this should never happen! DynamicFieldNotFound error: {:?}", e);
+			}
 		};
 		return None
 	}

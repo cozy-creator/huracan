@@ -16,11 +16,12 @@ use futures_batch::ChunksTimeoutStreamExt;
 use mongodb::{options::FindOneOptions, Database};
 use pulsar::{Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
-use sui_sdk::rpc_types::{SuiObjectDataOptions, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery};
+use sui_sdk::rpc_types::{
+	SuiObjectDataOptions, SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery, TransactionFilter,
+};
 use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest},
 	messages_checkpoint::CheckpointSequenceNumber,
-	query::TransactionFilter,
 };
 use tokio::{
 	pin,
