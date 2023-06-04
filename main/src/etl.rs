@@ -915,6 +915,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 								yield (StepStatus::Err, item);
 							},
 							Ok(res) => {
+								// TODO send them off in batches
 								if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
 									item.version = version;
 									item.bytes = bytes;
@@ -933,6 +934,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					}
 					for (mut item, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
+						// TODO send them off in batches
 						if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
 							item.version = version;
 							item.bytes = bytes;
@@ -1031,6 +1033,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					}
 
 					let completed_at = pc.tracklatency.then(|| Utc::now().timestamp_millis() as u64);
+					// TODO send whole batch at once
 					for item in chunk {
 						last_tx.send((StepStatus::Ok, item, completed_at)).await.unwrap();
 					}
