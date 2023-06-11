@@ -394,9 +394,8 @@ async fn spawn_microscan(
 	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
 	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.lowlatency.queuebuffers.cpcompletions);
 	let step_size = num_step1_workers;
-	let mut handles = Vec::with_capacity(num_step1_workers);
 	for partition in 0..num_step1_workers {
-		handles.push(tokio::spawn(do_scan(
+		tokio::spawn(do_scan(
 			cfg.lowlatency.clone(),
 			IngestRoute::Microscan,
 			checkpoint_max,
@@ -407,7 +406,7 @@ async fn spawn_microscan(
 			None,
 			items_tx.clone(),
 			cp_control_tx.clone(),
-		)));
+		));
 	}
 
 	(items_rx, cp_control_rx)
