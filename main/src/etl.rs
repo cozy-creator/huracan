@@ -148,7 +148,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						warn!("failed getting latest checkpoint: {}", e);
+						warn!("failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
@@ -178,7 +178,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let latest_cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						warn!("failed getting latest checkpoint: {}", e);
+						warn!("failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
