@@ -709,8 +709,8 @@ async fn do_scan(
 							let mut tx_digest_once = Some(block.digest);
 							for change in changes {
 								let Some((object_id, version, deleted)) = client::parse_change(change) else {
-									continue;
-								};
+                                    continue;
+                                };
 								if let Some(db) = &db {
 									let k = object_id.as_slice();
 									// known?
@@ -743,7 +743,7 @@ async fn do_scan(
 									.await;
 								if send_res.is_err() {
 									// channel closed, consumers stopped
-									return
+									break 'cp
 								}
 							}
 						}
@@ -842,11 +842,11 @@ async fn do_poll(
 					// processor know immediately
 					// we also skip those items here, so we don't need to coordinate with it
 					if let Some(cp) = block.checkpoint && checkpoints.insert(cp) {
-						observed_checkpoints_tx.send(cp).ok();
-						continue;
-					}
+                        observed_checkpoints_tx.send(cp).ok();
+                        continue;
+                    }
 					let mut tx_digest_once = Some(block.digest);
-					let Some(changes) = block.object_changes else { continue };
+					let Some(changes) = block.object_changes else { continue; };
 					for (id, version, deletion) in changes.into_iter().filter_map(client::parse_change) {
 						if items
 							.send((
@@ -965,15 +965,15 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 			// and neither for mixing all of those easily
 			// but what it does provide is the generic run_command() method,
 			let updates = chunk.iter().map(|item| {
-				let v = item.version.to_string();
-				let v_ = u64::from_str_radix(&v[2..], 16).unwrap();
-				// FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
-				let v_ = v_ as i64;
-				if item.deletion {
-					// we're assuming each object id will ever exist only once, so when deleting
-					// we don't check for previous versions
-					// we execute the delete, whenever it may come in, and it's final
-					doc! {
+                let v = item.version.to_string();
+                let v_ = u64::from_str_radix(&v[2..], 16).unwrap();
+                // FIXME our value range here is u64, but I can't figure out how to get a BSON repr of a u64?!
+                let v_ = v_ as i64;
+                if item.deletion {
+                    // we're assuming each object id will ever exist only once, so when deleting
+                    // we don't check for previous versions
+                    // we execute the delete, whenever it may come in, and it's final
+                    doc! {
 						"q": doc! { "_id": item.id.to_string() },
 						"u": doc! {
 							"$set": {
@@ -986,12 +986,12 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 						"upsert": true,
 						"multi": false,
 					}
-				} else {
-					// we will only upsert and object if this current version is higher than any previously stored one
-					// (if the object has already been deleted, we still allow setting any other fields, including
-					// any previously valid full object state... probably not needed, but also not incorrect)
-					let mut c = Cursor::new(&item.bytes);
-					doc! {
+                } else {
+                    // we will only upsert and object if this current version is higher than any previously stored one
+                    // (if the object has already been deleted, we still allow setting any other fields, including
+                    // any previously valid full object state... probably not needed, but also not incorrect)
+                    let mut c = Cursor::new(&item.bytes);
+                    doc! {
 						"q": doc! { "_id": item.id.to_string() },
 						// use an aggregation pipeline in our update, so that we can conditionally update
 						// the version and object only if the previous version was lower than our current one
@@ -1009,8 +1009,8 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 						"upsert": true,
 						"multi": false,
 					}
-				}
-			}).collect::<Vec<_>>();
+                }
+            }).collect::<Vec<_>>();
 			let n = updates.len();
 			let res = db
 				.run_command(
