@@ -4,6 +4,7 @@ use std::{
 	io::Cursor,
 	iter::zip,
 	sync::atomic::{AtomicU16, Ordering::Relaxed},
+	vec::IntoIter,
 };
 
 use anyhow::Result;
@@ -25,7 +26,7 @@ use sui_types::{
 };
 use tokio::{
 	pin,
-	sync::mpsc::{Receiver as TReceiver, Sender as TSender, UnboundedReceiver, UnboundedSender},
+	sync::mpsc::{Receiver as TReceiver, Sender as TSender, Sender, UnboundedReceiver, UnboundedSender},
 	task::JoinHandle,
 };
 
@@ -635,6 +636,215 @@ async fn spawn_fullscan_pipeline(
 	}
 
 	Ok((step1finished_rx, handle))
+}
+
+async fn do_walk(
+	pc: PipelineConfig,
+	ingest_route: IngestRoute,
+	checkpoint_start: u64,
+	completed_checkpoint_ranges: Vec<(u64, u64)>,
+	mut sui: ClientPool,
+	db: Option<Arc<DBWithThreadMode<SingleThreaded>>>,
+	object_ids_tx: ACSender<(Option<TransactionDigest>, ObjectItem)>,
+	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
+) {
+	// general idea:
+	// query first incomplete checkpoint
+	// skip items while within completed range
+	// remember last page digest
+	// if checkpoint of last item in current batch is still > N checkpoints away from next incomplete
+	// checkpoint, then we want to query by checkpoint again, otherwise continue from digest
+
+	let mut cp = checkpoint_start;
+	let mut last_cp = u64::MAX;
+
+	let mut completed_iter = completed_checkpoint_ranges.into_iter();
+	let mut completed_range = completed_iter.next();
+
+	'cp: loop {
+		let mut num_objects = 0u32;
+
+		macro_rules! traverse_checkpoints {
+			($next_cp:expr) => {
+				let next_cp = $next_cp;
+				match traverse_checkpoints(
+					&cp_control_tx,
+					&mut cp,
+					&mut completed_iter,
+					&mut completed_range,
+					&mut num_objects,
+					next_cp,
+				)
+				.await
+				{
+					MoveAction::Continue => {
+						// just continue as we would
+					}
+					MoveAction::NextCheckpoint => continue 'cp,
+					MoveAction::End => break 'cp,
+				}
+			};
+		}
+
+		// ensure we don't get into an infinite loop with the current checkpoint
+		if cp == last_cp {
+			traverse_checkpoints!(cp - 1);
+			last_cp = cp;
+		}
+
+		let mut query_cp = Some(cp);
+		let mut cursor = None;
+		let mut retries_left = pc.step1retries;
+
+		loop {
+			// loop that progresses through all pages of a query which has been started by checkpoint,
+			// but then does not limit itself to that single checkpoint
+			let call_start_ts = Utc::now().timestamp_millis() as u64;
+			let q = SuiTransactionBlockResponseQuery::new(
+				query_cp.take().map(|cp| TransactionFilter::Checkpoint(cp as CheckpointSequenceNumber)),
+				Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
+			);
+			let page = sui.query_transaction_blocks(q, cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
+			match page {
+				Ok(page) => {
+					retries_left = pc.step1retries;
+					for block in page.data {
+						let block_cp = block.checkpoint.unwrap() as u64;
+						if block_cp != cp {
+							traverse_checkpoints!(block_cp);
+						}
+						// if we're still here, we want to track the next cursor immediately, as we
+						// might not actually have any changes in this block or will be skipping it
+						cursor = Some(block.digest);
+						// skip this block?
+						if block_cp > cp {
+							continue
+						}
+						if let Some(changes) = block.object_changes {
+							let mut tx_digest_once = Some(block.digest);
+							for change in changes {
+								let Some((object_id, version, deleted)) = client::parse_change(change) else {
+                                    continue;
+                                };
+								if let Some(db) = &db {
+									let k = object_id.as_slice();
+									// known?
+									if let None = db.get_pinned(k).unwrap() {
+										// no, new one, so we mark it as known
+										// FIXME put version so we can ensure only older versions are skipped
+										//	     in case we process things out of order
+										db.put(k, Vec::new()).unwrap();
+									// keep going below
+									} else {
+										continue
+									}
+								}
+								num_objects += 1;
+								// send to step 2
+								let send_res = object_ids_tx
+									.send((
+										tx_digest_once.take(),
+										ObjectItem {
+											cp: cp as CheckpointSequenceNumber,
+											deletion: deleted,
+											id: object_id,
+											version,
+											ts_sui: block.timestamp_ms,
+											ts_first_seen: call_start_ts,
+											ingested_via: ingest_route,
+											bytes: Default::default(),
+										},
+									))
+									.await;
+								if send_res.is_err() {
+									// channel closed, consumers stopped
+									break 'cp
+								}
+							}
+						}
+					}
+					if !page.has_next_page {
+						break
+					} else if page.next_cursor.is_none() {
+						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
+						break
+					} else {
+						cursor = page.next_cursor;
+					}
+				}
+				Err(err) => {
+					if retries_left == 0 {
+						warn!(error = ?err, "Exhausted all retries fetching step 1 data, leaving checkpoint {} unfinished for this run", cp);
+						break
+					}
+					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
+					retries_left -= 1;
+					tokio::time::sleep(Duration::from_millis(pc.step1retrytimeoutms)).await;
+				}
+			}
+		}
+	}
+}
+
+enum MoveAction {
+	Continue,
+	NextCheckpoint,
+	End,
+}
+
+async fn traverse_checkpoints(
+	cp_control_tx: &Sender<(CheckpointSequenceNumber, u32)>,
+	cp: &mut u64,
+	completed_iter: &mut IntoIter<(u64, u64)>,
+	completed_range: &mut Option<(u64, u64)>,
+	num_objects: &mut u32,
+	next_cp: u64,
+) -> MoveAction {
+	for cp in *cp..next_cp {
+		// we're done with this previous cp
+		// send control message about number of expected object tasks from it
+		cp_control_tx.send((cp as CheckpointSequenceNumber, *num_objects)).await.unwrap();
+		*num_objects = 0;
+	}
+
+	*cp = next_cp;
+
+	// find next checkpoint
+	loop {
+		if let Some((end, start)) = completed_range {
+			if *cp < *start {
+				// cp too low already, check next one
+				*completed_range = completed_iter.next();
+			} else if *cp <= *end {
+				// if we're in range and start is 1 or 0, we're entirely done,
+				// as that means that all remaining checkpoints are already complete
+				if *start <= 1 {
+					return MoveAction::End
+				}
+				// match!
+				*cp = *start - 1;
+				// we also already know that we need to compare with the next range item
+				*completed_range = completed_iter.next();
+
+				// is jumping to that cp faster than continuing to walk?
+				const CHECKPOINT_DENSITY: f32 = 0.3;
+				if (next_cp - *cp) > (SUI_QUERY_MAX_RESULT_LIMIT as f32 / CHECKPOINT_DENSITY) as u64 * 2 {
+					// jump!
+					return MoveAction::NextCheckpoint
+				}
+
+				break
+			} else {
+				// this cp is still higher than our highest range end, so we wait and try again
+				// while cp is getting lower and lower, until we have a potential match
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	MoveAction::Continue
 }
 
 async fn do_scan(
