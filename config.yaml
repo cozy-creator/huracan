@@ -3,7 +3,7 @@ net: testnet
 rocksdbfile: ./fullscan.tmp.db
 
 # how many checkpoints we need to be behind to change into throughput mode for catching up quickly
-fallbehindthreshold: 120
+fallbehindthreshold: 240
 pausepolloncatchup: false
 pollintervalms: 100
 
@@ -11,23 +11,23 @@ throughput:
   queuebuffers:
     # 1024 * 1024
     step1out: 1048576
-    cpcompletions: 128
+    cpcompletions: 1024
     mongoinfactor: 10
-    last: 1024
+    last: 4096
   workers:
     # these worker counts assume just a single but powerful rpc provider like suiscan being used
-    step1: 2
-    step2: 3
-    mongo:
+    step1: 16
+    step2: 64
+    mongo: 32
   objectqueries:
     batchsize: 50
     batchwaittimeoutms: 1000
   mongo:
-    batchsize: 10000
+    batchsize: 4096
     batchwaittimeoutms: 1000
-    retries: 2
+    retries: 32
     zstdlevel: 5
-  step1retries: 3
+  step1retries: 32
   step1retrytimeoutms: 500
   tracklatency: false
 
@@ -51,10 +51,10 @@ lowlatency:
   mongo:
     batchsize: 1024
     batchwaittimeoutms: 10
-    retries: 3
+    retries: 32
     zstdlevel: 1
-  step1retries: 3
-  step1retrytimeoutms: 10
+  step1retries: 128
+  step1retrytimeoutms: 250
   tracklatency: true
 
 mongo:
