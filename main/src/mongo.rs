@@ -39,7 +39,7 @@ pub async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Databas
 			)
 			.await
 		{
-			warn!("failed saving checkpoint to mongo: {}", err);
+			warn!("failed saving checkpoint to mongo: {:?}", err);
 			if retries_left > 0 {
 				retries_left -= 1;
 				continue
