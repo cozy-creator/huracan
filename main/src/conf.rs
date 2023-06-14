@@ -21,6 +21,8 @@ pub struct PipelineConfig {
 	pub step1retries:        usize,
 	pub step1retrytimeoutms: u64,
 	pub tracklatency:        bool,
+	#[serde(default)]
+	pub lowlatency:          bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -131,6 +133,7 @@ impl AppConfig {
 			Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?;
 		config.throughput.name = "throughput".into();
 		config.lowlatency.name = "lowlatency".into();
+		config.lowlatency.lowlatency = true;
 
 		// FIXME validate that the directory is either empty, doesn't exist or contains ONLY rocksDB data files
 		//			this is because we automatically remove the dir at runtime without further checks

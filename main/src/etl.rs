@@ -36,8 +36,8 @@ use crate::{
 	client::{parse_get_object_response, ClientPool},
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool, mongo,
-	mongo::{mongo_checkpoint, Checkpoint},
-	utils::make_descending_ranges,
+	mongo::{mongo_checkpoint, CheckpointRange},
+	utils::{make_descending_ranges, make_descending_ranges_tuples},
 };
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -121,9 +121,15 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 	});
 
 	// rest of the low-latency pipeline
-	let (ll_cp_control_tx, ll_handle) =
-		spawn_pipeline_tail(cfg.clone(), cfg.lowlatency.clone(), sui.clone(), pulsar.clone(), ll_items_rx.clone())
-			.await?;
+	let (ll_cp_control_tx, ll_handle) = spawn_pipeline_tail(
+		cfg.clone(),
+		cfg.lowlatency.clone(),
+		sui.clone(),
+		pulsar.clone(),
+		ll_items_rx.clone(),
+		Vec::new(),
+	)
+	.await?;
 
 	// observe checkpoints flow:
 	// if we fell behind too far, we focus on throughput until caught up:
@@ -142,7 +148,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 		async move {
 			let mongo = cfg.mongo.client(&cfg.lowlatency.mongo).await.unwrap();
-			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
+			let coll = mongo.collection::<CheckpointRange>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
 			let start_cp_for_offset = loop {
@@ -419,6 +425,7 @@ async fn spawn_pipeline_tail(
 	sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
 	object_ids_rx: ACReceiver<(Option<TransactionDigest>, ObjectItem)>,
+	mut completed_checkpoint_ranges: Vec<(u64, u64)>,
 ) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
@@ -486,6 +493,7 @@ async fn spawn_pipeline_tail(
 	// on the control messages falls too far behind -- we don't want to process major portions of the
 	// chain without also storing info about our progress so we can resume about where we left off
 	let (cp_control_tx, mut cp_control_rx) = tokio::sync::mpsc::channel(pc.queuebuffers.cpcompletions);
+	let (cp_acc_tx, mut cp_acc_rx) = async_channel::bounded(pc.queuebuffers.cpcompletions);
 
 	let handle = tokio::spawn({
 		let cfg = cfg.clone();
@@ -529,12 +537,136 @@ async fn spawn_pipeline_tail(
 					else => break,
 				};
 				if *v == 0 {
-					mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
+					if pc.lowlatency {
+						mongo_checkpoint(&cfg, &pc, &mongo, cp).await;
+					} else {
+						cp_acc_tx.send(cp).await.ok();
+					}
 					completions_left.remove(&cp);
 					max_cp_completed = max_cp_completed.max(cp);
 				}
 			}
 			max_cp_completed
+		}
+	});
+
+	// checkpoint accumulation + batch saving, if configured
+	tokio::spawn({
+		async move {
+			let chunks = cp_acc_rx.chunks_timeout(20000, Duration::from_millis(15000));
+			pin!(chunks);
+			while let Some(chunk) = chunks.next().await {
+				let mut cps_iter = make_descending_ranges(chunk).into_iter();
+				let mut cp = cps_iter.next();
+				let mut citer = completed_checkpoint_ranges.iter_mut();
+				let mut completed = citer.next();
+				// ((end_, start_))*
+				let mut updates = Vec::new();
+				let mut last_update: Option<(u64, u64)> = None;
+
+				// merge ranges in lockstep
+				loop {
+					// get current completed item; else we're done with merging
+					let Some((y2, y1)) = completed else { break; };
+
+					// get current new range; else we're fully done
+					let Some((x2, x1)) = cp.as_mut() else { break; };
+
+					// we're carrying updated ranges info through both the "completed" item, as well
+					// as through the checkpoint item; the latter helps us merge multiple "completed"
+					// ranges
+
+					// if we're already below the completed range, try again with the next one
+					if *x2 < *y1 - 1 {
+						// we'll move to the next completed range below
+					}
+					// check for overlap -- already done for x2/y1, now for x1/y2
+					else if *x1 <= *y2 + 1 {
+						// range is now: (max(x2, y2), min(x1, y1))
+						let exp2 = (*y2).max(*x2);
+						let exp1 = (*y1).min(*x1);
+						if let Some((u2, u1)) = last_update.as_mut() {
+							// extend
+							*u2 = (*u2).max(exp2);
+							*u1 = (*u1).min(exp1);
+						} else {
+							last_update = Some((exp2, exp1));
+						}
+						// expand all ranges so we can keep merging them
+						let (exp2, exp1) = last_update.as_ref().unwrap();
+						*x2 = *exp2;
+						*y2 = *exp2;
+						*x1 = *exp1;
+						*y1 = *exp1;
+					}
+					// no overlap yet, we're still above the next range, so this range won't change
+					else {
+						// commit any oustanding update
+						if let Some(u) = last_update.take() {
+							updates.push(u);
+						}
+						// directly add our current range as it won't get merged
+						updates.push((*x2, *x1));
+						// move on to the next range
+						cp = cps_iter.next();
+
+						// but restart the loop with the current completed item
+						continue
+					}
+
+					// current completed range has been processed, on to the next
+					completed = citer.next();
+				}
+
+				// fixup completed ranges: throw out subsequent items with equal upper range bound
+				// as we've expanding all of them from the same upper bound but couldn't dedupe them
+				// in the loop we used up there
+				{
+					let mut last = 0;
+					completed_checkpoint_ranges.retain(|(y2, _)| {
+						let keep = *y2 != last;
+						last = *y2;
+						keep
+					});
+				}
+
+				// commit any oustanding update
+				if let Some(u) = last_update.take() {
+					updates.push(u);
+				}
+				// create updates from any remaining ranges
+				while let Some(x) = cps_iter.next() {
+					updates.push(x);
+				}
+
+				// generate mongodb updates
+				let (deletes, updates): (Vec<_>, Vec<_>) = updates
+					.into_iter()
+					.map(|(end, start)| {
+						(
+							// first delete previous items
+							doc! {
+								// delete all with $end >= _id >= $start
+								"q": doc! { "_id": doc! { "$lte": end as i64, "$gte": start as i64 } },
+								// delete all matching items
+								"limit": 0,
+							},
+							// then upsert new ones
+							doc! {
+								"q": doc! { "_id": end as i64 },
+								"u": doc! {
+									"$set": {
+										"_id": end as i64,
+										"start": start as i64,
+									},
+								},
+								"upsert": true,
+								"multi": false,
+							},
+						)
+					})
+					.unzip();
+			}
 		}
 	});
 
@@ -572,40 +704,32 @@ async fn spawn_fullscan_pipeline(
 
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
-		let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
-		let mut stop_at = 0;
-		let mut cpids = coll
+		let coll = mongo.collection::<CheckpointRange>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
+		let cpids = coll
 			.find(None, None)
 			.await
 			.unwrap()
 			.map(|r| {
 				let cp = r.unwrap();
-				if cp.stop.unwrap_or(false) {
-					stop_at = stop_at.max(cp._id);
-				}
-				cp._id
+				(cp.start.unwrap_or(cp._id), cp._id)
 			})
 			.collect::<Vec<_>>()
 			.await;
-		// ensure that we actually stop there
-		if stop_at > 0 {
-			cpids.sort_unstable();
-			// chop off all checkpoints lower than stop_at
-			cpids.drain_filter(|cp| *cp < stop_at);
-			let mut ranges = make_descending_ranges(cpids);
-			// add where to stop as the last range item
-			ranges.push((stop_at, 0));
-			ranges
-		} else {
-			make_descending_ranges(cpids)
-		}
+		make_descending_ranges_tuples(cpids)
 	};
 
 	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
 	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
 
-	let (cp_control_tx, handle) =
-		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), pulsar, object_ids_rx).await?;
+	let (cp_control_tx, handle) = spawn_pipeline_tail(
+		cfg.clone(),
+		pc.clone(),
+		sui.clone(),
+		pulsar,
+		object_ids_rx,
+		completed_checkpoint_ranges.clone(),
+	)
+	.await?;
 
 	// spawn as many step 1 workers as we have RPC server urls,
 	// let each worker freely balance requests between them
