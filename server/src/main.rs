@@ -332,7 +332,7 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	} else if let Ok(addr) = owner.get_str("ObjectOwner") {
 		(Some(addr.to_string()), SuiOwnershipType::Object, None)
 	} else if let Ok(shared) = owner.get_document("Shared") {
-		// FIXME
+		// FIXME u64/i64 issue
 		(None, SuiOwnershipType::Shared, Some(shared.get_i64("initial_shared_version").unwrap() as u64))
 	} else {
 		(None, SuiOwnershipType::Immutable, None)
