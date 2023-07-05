@@ -1,0 +1,8 @@
+query GetObjectsByOwner($args: ObjectArgsInput!) {
+    objects(args: $args) {
+        type {
+            full
+        }
+        id
+    }
+}

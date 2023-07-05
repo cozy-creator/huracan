@@ -1,0 +1,8 @@
+// WARNING - VERY SLOW AND COSTLY 30+ SECONDS
+// SCANS EVERY INDIVIDUAL DOCUMENT
+db.prod_mainnet_objects.aggregate([
+    { $group: {
+        _id: null,
+        max: { $max: { $bsonSize: "$$ROOT" } }
+    }}
+])
