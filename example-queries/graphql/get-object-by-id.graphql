@@ -1,0 +1,9 @@
+query GetObjectById($objectId: ID!) {
+    object(id: $objectId) {
+        type {
+            full
+        }
+        fields
+        owner
+    }
+}

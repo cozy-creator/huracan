@@ -1,0 +1,2 @@
+db.getSiblingDB("sui").getCollection("prod_mainnet_objects")
+.distinct("object.type")
