@@ -79,12 +79,16 @@ sui:
       name: suiscan
       objectsquerylimit: 50
       # slow!
-#    - url: https://sui-testnet.nodeinfra.com:443
-#      name: nodeinfra
-#      objectsquerylimit: 50
+  #    - url: https://sui-testnet.nodeinfra.com:443
+  #      name: nodeinfra
+  #      objectsquerylimit: 50
   mainnet:
     - url: https://rpc-mainnet.suiscan.xyz:443
       name: suiscan
+      objectsquerylimit: 50
+  localnet:
+    - url: http://127.0.0.1:9000
+      name: sui-test-validator
       objectsquerylimit: 50
 
 log:
