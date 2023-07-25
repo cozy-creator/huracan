@@ -315,7 +315,7 @@ impl QueryRoot {
 				doc! {
 					"$match": {
 						"object.type": doc! {"$in": vec![object_type]},
-						value_path: doc! {"$in": vec![input.value.value ]},
+						value_path: doc! {"$in": vec![input.value.value]},
 					}
 				}
 			} else {
@@ -323,7 +323,7 @@ impl QueryRoot {
 					"$match":{
 						"object.type": doc! {"$in": vec![object_type]},
 							key_path: doc! {"$in":key_values},
-							value_path: doc! {"$in": vec![input.value.value ]},
+							value_path: doc! {"$in": vec![input.value.value]},
 						}
 				}
 			};
