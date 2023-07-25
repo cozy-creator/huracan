@@ -561,6 +561,19 @@ async fn main() -> anyhow::Result<()> {
 		.await
 		.unwrap();
 		println!("ensured index exists: object type");
+		// create index for object.content.fields.value.fields.owner
+		coll.create_index(
+			IndexModel::builder()
+				.keys(doc! {
+					"object.content.fields.value.fields.owner": 1,
+				})
+				.options(None)
+				.build(),
+			None,
+		)
+		.await
+		.unwrap();
+		println!("ensured index exists: capsules object owner");
 		coll
 	};
 
