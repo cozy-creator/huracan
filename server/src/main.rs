@@ -296,20 +296,14 @@ impl QueryRoot {
 			let DynamicFieldTypeInput { key_type, value_type } = input.field_type;
 			let object_type = format!("0x2::dynamic_field::Field<{}, {}>", key_type, value_type);
 
-			let (key_values, key) = match input.key {
-				Some(inner) => (vec![inner.value], inner.key),
-				None => (Vec::new(), None),
-			};
-
-			let key_path = match key {
-				Some(k) => format!("object.content.fields.name.fields.{}", k),
-				None => String::from("object.content.fields.name"),
-			};
-
-			let value_path = match input.value.key {
-				Some(inner) => format!("object.content.fields.value.fields.{}", inner),
-				None => String::from("object.content.fields.value"),
-			};
+			let (key_values, key) = input.key.map_or((Vec::new(), None), |inner| (vec![inner.value], inner.key));
+			let key_path = key.map_or_else(
+				|| String::from("object.content.fields.name"),
+				|k| format!("object.content.fields.name.fields.{}", k),
+			);
+			let value_path = input.value.key.map_or(String::from("object.content.fields.value"), |inner| {
+				format!("object.content.fields.value.fields.{}", inner)
+			});
 
 			let match_stage = if key_values.is_empty() {
 				doc! {
@@ -322,9 +316,9 @@ impl QueryRoot {
 				doc! {
 					"$match":{
 						"object.type": doc! {"$in": vec![object_type]},
-							key_path: doc! {"$in":key_values},
-							value_path: doc! {"$in": vec![input.value.value]},
-						}
+						key_path: doc! {"$in": key_values},
+						value_path: doc! {"$in": vec![input.value.value]},
+					}
 				}
 			};
 
@@ -333,8 +327,8 @@ impl QueryRoot {
 				doc! {
 					"$lookup": {
 						"from": c.name(),
-					  "let": {"ownerObjectId": "$object.owner.ObjectOwner"},
-					  "pipeline": [{"$match": {"$expr": {"$eq": ["$_id", "$$ownerObjectId"]}}}],
+						"let": {"ownerObjectId": "$object.owner.ObjectOwner"},
+						"pipeline": [{"$match": {"$expr": {"$eq": ["$_id", "$$ownerObjectId"]}}}],
 						"as": "object"
 					},
 				},
