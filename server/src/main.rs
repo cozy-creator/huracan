@@ -15,7 +15,7 @@ use futures::Stream;
 use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
-	options::{ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
+	options::{AggregateOptions, ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
 	Collection, IndexModel,
 };
 use serde::{Deserialize, Serialize};
@@ -342,7 +342,8 @@ impl QueryRoot {
 				doc! {"$replaceWith": "$object"},
 			];
 
-			c.aggregate(pipeline, None).await
+			let opts = AggregateOptions::builder().allow_disk_use(true).build();
+			c.aggregate(pipeline, opts).await
 		} else {
 			return Err(QueryError::InvalidQuery)
 		} {
