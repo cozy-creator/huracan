@@ -500,7 +500,7 @@ async fn spawn_pipeline_tail(
 				let (cp, v) = tokio::select! {
 					Some((status, item, completed_at)) = last_rx.recv() => {
 						if let (Some(ts_sui), Some(completed)) = (item.ts_sui, completed_at) {
-							let latency = completed - item.ts_first_seen;
+							let latency = completed.checked_sub(item.ts_first_seen).unwrap_or(0);
 							// we don't want to log the same value more than once consecutively
 							if latency != last_latency {
 								let source = match item.ingested_via {

@@ -15,7 +15,7 @@ use futures::Stream;
 use futures_util::TryStreamExt;
 use mongodb::{
 	bson::{doc, Document},
-	options::{ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
+	options::{AggregateOptions, ClientOptions, Compressor, FindOptions, IndexOptions, ServerApi, ServerApiVersion},
 	Collection, IndexModel,
 };
 use serde::{Deserialize, Serialize};
@@ -28,18 +28,38 @@ struct QueryRoot;
 
 #[derive(InputObject)]
 struct ObjectArgsInput {
-	ids:    Option<Vec<String>>,
-	owner:  Option<String>,
-	owners: Option<Vec<String>>,
+	ids:           Option<Vec<String>>,
+	owner:         Option<String>,
+	owners:        Option<Vec<String>>,
 	// could be just $package, or $p::$module or $p::$m::$struct or $p::$m::$s<$generics...>
 	// we parse them, translate them into access via indexes
 	#[graphql(name = "type")]
-	type_:  Option<String>,
-	types:  Option<Vec<String>>,
+	type_:         Option<String>,
+	types:         Option<Vec<String>>,
 	// by prev tx digest? --> actually just use tx toplevel query then
 	// TODO pagination, how does relay do it?
-	limit:  Option<usize>,
-	skip:   Option<usize>,
+	limit:         Option<usize>,
+	skip:          Option<usize>,
+	dynamic_field: Option<DynamicFieldFieldFilterInput>,
+}
+
+#[derive(InputObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+struct DynamicFieldFieldFilterInput {
+	field_type: DynamicFieldTypeInput,
+	value:      DynamicFieldInnerInput,
+	key:        Option<DynamicFieldInnerInput>,
+}
+
+#[derive(InputObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+struct DynamicFieldTypeInput {
+	key_type:   String,
+	value_type: String,
+}
+
+#[derive(InputObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+struct DynamicFieldInnerInput {
+	key:   Option<String>,
+	value: String,
 }
 
 #[derive(SimpleObject, Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
@@ -272,6 +292,52 @@ impl QueryRoot {
 				opts,
 			)
 			.await
+		} else if let Some(input) = args.dynamic_field {
+			let DynamicFieldTypeInput { key_type, value_type } = input.field_type;
+			let object_type = format!("0x2::dynamic_field::Field<{}, {}>", key_type, value_type);
+
+			let (key_values, key) = input.key.map_or((Vec::new(), None), |inner| (vec![inner.value], inner.key));
+			let key_path = key.map_or_else(
+				|| String::from("object.content.fields.name"),
+				|k| format!("object.content.fields.name.fields.{}", k),
+			);
+			let value_path = input.value.key.map_or(String::from("object.content.fields.value"), |inner| {
+				format!("object.content.fields.value.fields.{}", inner)
+			});
+
+			let match_stage = if key_values.is_empty() {
+				doc! {
+					"$match": {
+						"object.type": doc! {"$in": vec![object_type]},
+						value_path: doc! {"$in": vec![input.value.value]},
+					}
+				}
+			} else {
+				doc! {
+					"$match":{
+						"object.type": doc! {"$in": vec![object_type]},
+						key_path: doc! {"$in": key_values},
+						value_path: doc! {"$in": vec![input.value.value]},
+					}
+				}
+			};
+
+			let pipeline = vec![
+				match_stage,
+				doc! {
+					"$lookup": {
+						"from": c.name(),
+						"let": {"ownerObjectId": "$object.owner.ObjectOwner"},
+						"pipeline": [{"$match": {"$expr": {"$eq": ["$_id", "$$ownerObjectId"]}}}],
+						"as": "object"
+					},
+				},
+				doc! {"$unwind": "$object"},
+				doc! {"$replaceWith": "$object"},
+			];
+
+			let opts = AggregateOptions::builder().allow_disk_use(true).build();
+			c.aggregate(pipeline, opts).await
 		} else {
 			return Err(QueryError::InvalidQuery)
 		} {
@@ -495,6 +561,19 @@ async fn main() -> anyhow::Result<()> {
 		.await
 		.unwrap();
 		println!("ensured index exists: object type");
+		// create index for object.content.fields.value.fields.owner
+		coll.create_index(
+			IndexModel::builder()
+				.keys(doc! {
+					"object.content.fields.value.fields.owner": 1,
+				})
+				.options(None)
+				.build(),
+			None,
+		)
+		.await
+		.unwrap();
+		println!("ensured index exists: capsules object owner");
 		coll
 	};
 

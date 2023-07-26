@@ -104,8 +104,9 @@ pub struct RpcProviderConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiConfig {
-	pub testnet: Vec<RpcProviderConfig>,
-	pub mainnet: Vec<RpcProviderConfig>,
+	pub testnet:  Vec<RpcProviderConfig>,
+	pub mainnet:  Vec<RpcProviderConfig>,
+	pub localnet: Vec<RpcProviderConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -147,8 +148,10 @@ impl AppConfig {
 			&self.sui.testnet
 		} else if self.net == "mainnet" {
 			&self.sui.mainnet
+		} else if self.net == "localnet" {
+			&self.sui.localnet
 		} else {
-			panic!("unknown net configuration: {} (expected: mainnet | testnet)", self.net);
+			panic!("unknown net configuration: {} (expected: mainnet | testnet | localnet)", self.net);
 		};
 		if providers.is_empty() {
 			panic!("no RPC providers configured for {}!", self.net);
