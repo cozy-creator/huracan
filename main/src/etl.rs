@@ -1244,7 +1244,6 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					let completed_at = pc.tracklatency.then(|| Utc::now().timestamp_millis() as u64);
 					// TODO send whole batch at once
 					for item in chunk {
-						println!("{:?}", completed_at);
 						last_tx.send((StepStatus::Ok, item, completed_at)).await.unwrap();
 					}
 
