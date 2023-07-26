@@ -26,7 +26,7 @@ use sui_types::{
 };
 use tokio::{
 	pin,
-	sync::mpsc::{Receiver as TReceiver, Sender as TSender, Sender, UnboundedReceiver, UnboundedSender},
+	sync::mpsc::{Receiver as TReceiver, Sender as TSender, UnboundedReceiver, UnboundedSender},
 	task::JoinHandle,
 };
 
@@ -793,7 +793,7 @@ enum MoveAction {
 }
 
 async fn traverse_checkpoints(
-	cp_control_tx: &Sender<(CheckpointSequenceNumber, u32)>,
+	cp_control_tx: &TSender<(CheckpointSequenceNumber, u32)>,
 	cp: &mut u64,
 	completed_iter: &mut IntoIter<(u64, u64)>,
 	completed_range: &mut Option<(u64, u64)>,
