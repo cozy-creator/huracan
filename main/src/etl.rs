@@ -500,7 +500,7 @@ async fn spawn_pipeline_tail(
 				let (cp, v) = tokio::select! {
 					Some((status, item, completed_at)) = last_rx.recv() => {
 						if let (Some(ts_sui), Some(completed)) = (item.ts_sui, completed_at) {
-							let latency = completed - item.ts_first_seen;
+							let latency = completed.checked_sub(item.ts_first_seen).unwrap_or(0);
 							// we don't want to log the same value more than once consecutively
 							if latency != last_latency {
 								let source = match item.ingested_via {
@@ -1244,6 +1244,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					let completed_at = pc.tracklatency.then(|| Utc::now().timestamp_millis() as u64);
 					// TODO send whole batch at once
 					for item in chunk {
+						println!("{:?}", completed_at);
 						last_tx.send((StepStatus::Ok, item, completed_at)).await.unwrap();
 					}
 
