@@ -9,7 +9,7 @@ use async_graphql::{
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use async_stream::stream;
 use base64::Engine;
-use bson::Bson;
+use bson::{spec::ElementType, Bson};
 use dotenv::dotenv;
 use futures::Stream;
 use futures_util::TryStreamExt;
@@ -391,18 +391,31 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	let package = it.next().unwrap().to_string();
 	let module = it.next().unwrap().to_string();
 	let struct_ = it.next().unwrap().to_string();
+
 	// owner
-	let owner = o.get_document("owner").unwrap();
-	let (owner, ownership_type, initial_shared_version) = if let Ok(addr) = owner.get_str("AddressOwner") {
-		(Some(addr.to_string()), SuiOwnershipType::Address, None)
-	} else if let Ok(addr) = owner.get_str("ObjectOwner") {
-		(Some(addr.to_string()), SuiOwnershipType::Object, None)
-	} else if let Ok(shared) = owner.get_document("Shared") {
-		// FIXME u64/i64 issue
-		(None, SuiOwnershipType::Shared, Some(shared.get_i64("initial_shared_version").unwrap() as u64))
-	} else {
-		(None, SuiOwnershipType::Immutable, None)
+	let owner = o.get("owner").unwrap_or(&Bson::Null);
+	let (owner, ownership_type, initial_shared_version) = match owner.element_type() {
+		ElementType::EmbeddedDocument => {
+			let value = owner.as_document().unwrap();
+
+			if let Ok(addr) = value.get_str("AddressOwner") {
+				(Some(addr.to_string()), SuiOwnershipType::Address, None)
+			} else if let Ok(addr) = value.get_str("ObjectOwner") {
+				(Some(addr.to_string()), SuiOwnershipType::Object, None)
+			} else if let Ok(shared) = value.get_document("Shared") {
+				// FIXME u64/i64 issue
+				(
+					None,
+					SuiOwnershipType::Shared,
+					Some(shared.get_i64("initial_shared_version").unwrap_or_default() as u64),
+				)
+			} else {
+				(None, SuiOwnershipType::Immutable, None)
+			}
+		}
+		_ => (None, SuiOwnershipType::Immutable, None),
 	};
+
 	// fields: only for moveObject-s
 	let content = o.get_document("content").unwrap();
 	let fields =
