@@ -376,17 +376,18 @@ fn parse(o: &Document) -> SuiIndexedObject {
 	// type
 	// split on just the first '<' to separate path from generics, if any
 	// then for path, split parts on '::'; for generics, split on ','
-	let ty = o.get_str("type").unwrap();
+	let full_ty = o.get_str("type").unwrap();
 	let mut generics = Vec::new();
-	let ty = if let Some((ty, terms)) = ty.split_once('<') {
+	let ty = if let Some((ty, terms)) = full_ty.split_once('<') {
 		let terms = &terms[..terms.len() - 1];
 		for term in terms.split(",") {
 			generics.push(term.trim_start().to_string());
 		}
 		ty
 	} else {
-		ty
+		full_ty
 	};
+
 	let mut it = ty.split("::");
 	let package = it.next().unwrap().to_string();
 	let module = it.next().unwrap().to_string();
@@ -432,7 +433,7 @@ fn parse(o: &Document) -> SuiIndexedObject {
 		// FIXME
 		version,
 		digest: o.get_str("digest").unwrap().to_string(),
-		type_: SuiIndexedType { full: ty.to_string(), package, module, struct_, generics },
+		type_: SuiIndexedType { full: full_ty.to_string(), package, module, struct_, generics },
 		owner,
 		ownership_type,
 		initial_shared_version,
