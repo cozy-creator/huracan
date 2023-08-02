@@ -9,6 +9,7 @@
 #[macro_use]
 extern crate serde;
 
+use std::fs::File;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use _prelude::*;
@@ -45,17 +46,48 @@ async fn main() -> anyhow::Result<()> {
 // -- helpers
 
 fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
-	let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
-	if let Some(filters) = &cfg.log.filter {
-		for filter_str in filters {
-			filter = filter.add_directive(filter_str.parse()?);
+
+	// Configure tracing collector with file output.
+	if cfg.log.output == "logfile" {
+		// Create filters based on config.
+		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
+		if let Some(filters) = &cfg.log.filter {
+			for filter_str in filters {
+				filter = filter.add_directive(filter_str.parse()?);
+			}
 		}
+		let log_file = File::create(&cfg.log.logfilepath)?;
+		let collector =
+			tracing_subscriber::fmt()
+				.with_env_filter(filter)
+				.with_target(false)
+				.with_line_number(true)
+				.with_file(true)
+				.with_writer(Mutex::new(log_file))
+				.json()
+				.finish();
+		tracing::subscriber::set_global_default(collector)?;
 	}
 
-	let collector =
-		tracing_subscriber::fmt().with_env_filter(filter).with_target(false).with_ansi(cfg.log.ansi).finish();
+	if cfg.log.output == "stdout" {
+		// Create filters based on config.
+		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
+		if let Some(filters) = &cfg.log.filter {
+			for filter_str in filters {
+				filter = filter.add_directive(filter_str.parse()?);
+			}
+		}
+		let collector =
+			tracing_subscriber::fmt()
+				.with_env_filter(filter)
+				.with_target(false)
+				.with_ansi(true)
+				.with_line_number(true)
+				.with_file(true)
+				.finish();
+		tracing::subscriber::set_global_default(collector)?;
+	}
 
-	tracing::subscriber::set_global_default(collector)?;
 	Ok(())
 }
 

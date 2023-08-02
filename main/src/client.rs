@@ -118,19 +118,19 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		use sui_types::error::SuiObjectResponseError::*;
 		match err {
 			Deleted { object_id, version, digest: _ } => {
-				warn!(object_id = ?object_id, version = ?version, "object not available: object has been deleted");
+				warn!(object_id = ?object_id, version = ?version, "SuiObjectResponseError : Deleted");
 			}
 			NotExists { object_id } => {
-				warn!(object_id = ?object_id, "object not available: object doesn't exist");
+				warn!(object_id = ?object_id, "SuiObjectResponseError : NotExists");
 			}
 			Unknown => {
-				warn!(object_id = ?id, "object not available: unknown error");
+				warn!("SuiObjectResponseError : Unknown");
 			}
 			DisplayError { error } => {
-				warn!(object_id = ?id, "object not available: display error: {}", error);
+				warn!("SuiObjectResponseError : DisplayError : {}", error);
 			}
-			e @ DynamicFieldNotFound { .. } => {
-				panic!("this should never happen! DynamicFieldNotFound error: {:?}", e);
+			ref e @ DynamicFieldNotFound { parent_object_id } => {
+				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
 			}
 		};
 		return None
@@ -142,7 +142,7 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
 		return Some((obj.version, bytes))
 	}
-	warn!(object_id = ?id, "neither .data nor .error was set in get_object response!");
+	warn!(object_id = ?id, "IngestError : neither .data nor .error was set in get_object response!");
 	return None
 }
 
