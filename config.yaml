@@ -44,29 +44,29 @@ pipeline:
   queuebuffers:
     checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
     cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
-    mongoinfactor: 1
+    mongoinfactor: 1 #  Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
     last: 256
   workers:
-    checkpoint: 1
-    object: 4
-    mongo: 4
+    checkpoint: 1 # The number of checkpoint workers used in livescan mode. Not used in backfill mode.
+    object: 4 # The number of object workers used in livescan mode. Not used in backfill mode.
+    mongo: 4 # The number of MongoDB workers used in livescan mode. Not used in backfill mode.
   objectqueries:
-    batchsize: 50
-    batchwaittimeoutms: 10
+    batchsize: 50 # The number of objects to request in each sui_multiGetObject() RPC invocation.
+    batchwaittimeoutms: 10 # Interval between sui_multieGetObject() RPC invocations.
   mongo:
-    batchsize: 1024
-    batchwaittimeoutms: 10
-    retries: 32
-    zstdlevel: 1
-  checkpointretries: 128
-  checkpointretrytimeoutms: 250
+    batchsize: 1024 # The number of objects updates sent on each bached Mongo operation.
+    batchwaittimeoutms: 10 # The interval between batched Mongo operations.
+    retries: 32 # The number of retries before a Mongo operation fails.
+    zstdlevel: 1 # On-wire MongoDB setting. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
+  checkpointretries: 128 # Maximum retries to fetch an individual checkpoint. App will panic if this is exceeded.
+  checkpointretrytimeoutms: 250 # Interval for checkpoint fetches.
   tracklatency: true
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
   #uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net
-  db: sui
-  collectionbase: objects
+  db: sui # The name of the MongoDB database.
+  collectionbase: objects # The prefix for the MongoDB collection. Turns into: format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
 
 pulsar:
   url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
@@ -78,6 +78,7 @@ pulsar:
   audience: urn:sn:pulsar:o-mvqin:nonprod
   topicbase: persistent://public/default/
 
+# RPC credentials. Each network can take one or more entries to facilitate round-robin RPC invocations.
 sui:
   testnet:
     - url: https://rpc-testnet.suiscan.xyz:443

@@ -145,7 +145,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 		// 	run full scan, potentially throttle ll work
 		// also remember that cp as the last one to use for mini-scans
 		// loop:
-		// 	run livescan for any cps since last livescan relevant
+		// 	run livescan for any checkpoints since last livescan relevant
 
 		async move {
 			let mongo = cfg.mongo.client(&cfg.pipeline.mongo).await.unwrap();
@@ -356,7 +356,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					ll_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.ok();
 				}
 
-				// now store completions for all cps we skipped above due to not receiving any items for
+				// now store completions for all checkpoints we skipped above due to not receiving any items for
 				while let Some((cp, num_items)) = livescan_cp_control_rx.recv().await {
 					if num_items == 0 {
 						ll_cp_control_tx.send((cp, num_items)).await.ok();
@@ -466,7 +466,7 @@ async fn spawn_pipeline_tail(
 					// convert stream to channel
 					pin!(stream);
 					while let Some(it) = stream.next().await {
-						mongo_tx.send(it).await.expect("passing items from step 2 stream to mongo tokio channel");
+						mongo_tx.send(it).await.expect("passing items from object data stream to mongo tokio channel");
 					}
 				}
 			});
