@@ -69,7 +69,7 @@ pulsar:
   # o-mvqin-testnet.json, base64-encoded
   # you probably want to override this via ENV
   # TODO discuss whether we should not include the testnet credentials here
-  credentials: eyJ0eXBlIjoic25fc2VydmljZV9hY2NvdW50IiwiY2xpZW50X2lkIjoiUzNPUlZNc1VabDBaRUU3TnJjM3FJNzFNd1JlYm94bGEiLCJjbGllbnRfc2VjcmV0IjoiSkRDdjRyOUQzTWVwTzc5empuWVRBcWwwNkpYb3F1R3l5OVNUVDZna21xdTZOZG13ZUtESzVZVTNQTkFtNU5IdyIsImNsaWVudF9lbWFpbCI6InRlc3RuZXRAby1tdnFpbi5hdXRoLnN0cmVhbW5hdGl2ZS5jbG91ZCIsImlzc3Vlcl91cmwiOiJodHRwczovL2F1dGguc3RyZWFtbmF0aXZlLmNsb3VkLyJ9
+  credentials: file:///opt/pulsar-credentials.json
   audience: urn:sn:pulsar:o-mvqin:nonprod
   topicbase: persistent://public/default/
 

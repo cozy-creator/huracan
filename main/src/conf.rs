@@ -89,8 +89,23 @@ pub struct PulsarConfig {
 #[serde(deny_unknown_fields)]
 pub struct LogConfig {
 	pub level:  CLevel,
-	pub ansi:   bool,
 	pub filter: Option<Vec<String>>,
+	// Must be either "stdout" or "logfile"
+	pub output: String,
+	// Ignored unless output == "logfile".
+	// Please declare as absolute path, example: "/var/log/indexer.log"
+	pub logfilepath: String,
+}
+
+impl Default for LogConfig {
+	fn default() -> LogConfig {
+		LogConfig {
+			level: CLevel(Level::INFO),
+			filter: None,
+			output: "logfile".to_string(),
+			logfilepath: "/var/log/indexer.log".to_string(),
+		}
+	}
 }
 
 #[derive(Clone, Debug, Deserialize)]
