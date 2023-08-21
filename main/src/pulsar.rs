@@ -23,7 +23,7 @@ pub async fn create(cfg: &AppConfig) -> anyhow::Result<Pulsar<TokioExecutor>> {
 	Ok(Pulsar::builder(&cfg.pulsar.url, TokioExecutor)
 		.with_auth_provider(OAuth2Authentication::client_credentials(OAuth2Params {
 			issuer_url:      cfg.pulsar.issuer.clone(),
-			credentials_url: format!("data:;base64,{}", cfg.pulsar.credentials),
+			credentials_url: cfg.pulsar.credentials.to_string().clone(),
 			audience:        Some(cfg.pulsar.audience.clone()),
 			scope:           None,
 		}))
