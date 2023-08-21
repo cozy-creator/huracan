@@ -1,5 +1,6 @@
+Cargo.lock
 /target
 /.local
 .env
-fullscan.tmp.db*
+backfill.tmp.db*
 .idea
