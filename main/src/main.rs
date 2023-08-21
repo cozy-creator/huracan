@@ -33,9 +33,9 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
-	if std::env::var("FULLSCAN_ONLY").is_ok() {
-		let start_checkpoint = std::env::var("FULLSCAN_FROM").ok().map(|v| v.parse().unwrap());
-		etl::run_fullscan_only(&cfg, start_checkpoint).await?;
+	if std::env::var("BACKFILL_ONLY").is_ok() {
+		let start_checkpoint = std::env::var("BACKFILL_FROM").ok().map(|v| v.parse().unwrap());
+		etl::run_backfill_only(&cfg, start_checkpoint).await?;
 	} else {
 		etl::run(&cfg).await.unwrap();
 	}

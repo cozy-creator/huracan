@@ -131,9 +131,9 @@ pub struct AppConfig {
 	pub net:                 String,
 	pub rocksdbfile:         String,
 	pub throughput:          PipelineConfig,
-	pub lowlatency:          PipelineConfig,
-	pub fallbehindthreshold: usize,
-	pub pausepolloncatchup:  bool,
+	pub pipeline:          PipelineConfig,
+	pub backfillthreshold: usize,
+	pub pausepollonbackfill:  bool,
 	pub pollintervalms:      u64,
 	pub mongo:               MongoConfig,
 	pub pulsar:              PulsarConfig,
@@ -146,7 +146,7 @@ impl AppConfig {
 		let mut config: AppConfig =
 			Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?;
 		config.throughput.name = "throughput".into();
-		config.lowlatency.name = "lowlatency".into();
+		config.pipeline.name = "pipeline".into();
 
 		// FIXME validate that the directory is either empty, doesn't exist or contains ONLY rocksDB data files
 		//			this is because we automatically remove the dir at runtime without further checks

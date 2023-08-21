@@ -1,4 +1,4 @@
-app = "indexer-prod-mainnet-fullscanonly"
+app = "indexer-prod-mainnet-backfillonly"
 primary_region = "sea"
 kill_signal = "SIGINT"
 kill_timeout = "30s"
@@ -9,6 +9,6 @@ auto_rollback = true
 [env]
 APP_ENV = "prod"
 APP_NET = "mainnet"
-FULLSCAN_ONLY = 1
+backfill_ONLY = 1
 APP_THROUGHPUT_WORKERS_STEP1 = 1000
 APP_MONGO_COLLECTIONBASE = "full"

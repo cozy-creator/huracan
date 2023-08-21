@@ -1,49 +1,54 @@
+# Environment is used to prefix logs, database collections, and Pulsar topics.
 env: dev
-net: testnet
-rocksdbfile: ./fullscan.tmp.db
 
-# how many checkpoints we need to be behind to change into throughput mode for catching up quickly
-fallbehindthreshold: 240
-pausepolloncatchup: false
+# Sui network.
+net: testnet
+
+# Location of RocksDB file used in backfill mode.
+rocksdbfile: ./backfill.tmp.db
+
+# Number of checkpoints we need to be behind to change into backfill mode.
+backfillthreshold: 240
+
+# Determine if we want to stop indexing the latest checkpoints while backfilling.
+pausepollonbackfill: false
+
+# Frequency at which we check for a new checkpoint on the Sui blockchain. Each interval will invoke an RPC call.
 pollintervalms: 100
 
+#
 throughput:
   queuebuffers:
     # 1024 * 1024
-    step1out: 1048576
+    checkpointout: 1048576
     cpcompletions: 1024
     mongoinfactor: 10
     last: 4096
   workers:
-    # these worker counts assume just a single but powerful rpc provider like suiscan being used
-    step1: 16
-    step2: 64
-    mongo: 32
+    checkpoint: 16 # Determine the number of Tokio threads issuing RPC calls for checkpoint data.
+    object: 64 # Determine the number of Tokio threads issuing RPC calls for full object data. Keep in mind that we use sui_multiGetObjects(), so there are many objects fetched on each invocation.
+    mongo: 32 # Determine the number of Tokio threads issuing CRUD operations to MongoDB. Keep in mind that we batch these queries based on config below.
   objectqueries:
-    batchsize: 50
-    batchwaittimeoutms: 1000
+    batchsize: 50 # Determine the number of Sui objects to fetch in a single sui_multiGetObjects() request.
+    batchwaittimeoutms: 1000 # Determine interval for issuing sui_multiGetObjects() request.
   mongo:
-    batchsize: 4096
-    batchwaittimeoutms: 1000
-    retries: 32
-    zstdlevel: 5
-  step1retries: 32
-  step1retrytimeoutms: 500
+    batchsize: 4096 # Determine the number of CRUD operations to issue to Mongo at each interval.
+    batchwaittimeoutms: 1000 # Determine the time between batched MongoDB operations.
+    retries: 32 # Determine the number of retries for MongoDB operations before dropping queries.
+    zstdlevel: 5 # MongoDB compression setting for on-wire data. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
+  checkpointretries: 32
+  checkpointretrytimeoutms: 500
   tracklatency: false
 
-lowlatency:
+pipeline:
   queuebuffers:
-    step1out: 2048
-    # on the ll queue we'd rather fall behind in saving checkpoint completions than
-    # cause stalling on any of the previous steps, as here we really only care about getting stuff into mongo
-    # with as little delay as possible
-    cpcompletions: 2048
+    checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
+    cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
     mongoinfactor: 1
     last: 256
   workers:
-    # this setting is only relevant for the "microscan" task
-    step1: 1
-    step2: 4
+    checkpoint: 1
+    object: 4
     mongo: 4
   objectqueries:
     batchsize: 50
@@ -53,8 +58,8 @@ lowlatency:
     batchwaittimeoutms: 10
     retries: 32
     zstdlevel: 1
-  step1retries: 128
-  step1retrytimeoutms: 250
+  checkpointretries: 128
+  checkpointretrytimeoutms: 250
   tracklatency: true
 
 mongo:

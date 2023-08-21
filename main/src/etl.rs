@@ -44,6 +44,9 @@ use crate::{
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;
 
+// Our internal representation of a Sui object change. The `bytes` property is left empty before we fetch the full object data.
+// This is the final output from the checkpoint/transaction block crawl. It is published to the object stream to queue an RPC lookup of the full object data.
+// After the object data lookup, `bytes` is populated and this struct is queued for CRUD into downstream systems.
 #[derive(Clone, Debug, Serialize, Deserialize, PulsarMessage)]
 pub struct ObjectItem {
 	pub cp:            CheckpointSequenceNumber,
@@ -56,13 +59,17 @@ pub struct ObjectItem {
 	pub bytes:         Vec<u8>,
 }
 
+// We track the last pipeline an ObjectItem has been through.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum IngestRoute {
+	// This ObjectItem was generated in `do_poll()` and does not yet contain full object data `bytes`.
 	Poll,
-	Microscan,
-	Fullscan,
+	//
+	Livescan,
+	Backfill,
 }
 
+// Ensure each data extraction step is successful. If a step is Err, it will be placed in the retry pipeline.
 #[derive(Debug)]
 pub enum StepStatus {
 	Ok,
@@ -78,14 +85,14 @@ impl Display for StepStatus {
 	}
 }
 
-pub async fn run_fullscan_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
+pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
-	let (_, handle) = spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui, pulsar, start_checkpoint).await?;
+	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.throughput, sui, pulsar, start_checkpoint).await?;
 	handle.await?;
 	Ok(())
 }
-
+// This is the default operation mode.
 pub async fn run(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
@@ -94,7 +101,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	// poll for latest txs
 	// (low-latency focus)
-	let (mut poll_items, _poll_observed_cps) = spawn_poll(cfg, sui.clone(), pause_ll.clone()).await;
+	let (mut poll_items, _poll_observed_cps) = spawn_checkpoint_poll(cfg, sui.clone(), pause_ll.clone()).await;
 
 	let (ll_items_tx, ll_items_rx) = async_channel::unbounded();
 	let (poll_items_transactions_tx, mut poll_items_transactions) = tokio::sync::mpsc::unbounded_channel();
@@ -122,12 +129,12 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	// rest of the low-latency pipeline
 	let (ll_cp_control_tx, ll_handle) =
-		spawn_pipeline_tail(cfg.clone(), cfg.lowlatency.clone(), sui.clone(), pulsar.clone(), ll_items_rx.clone())
+		spawn_pipeline_tail(cfg.clone(), cfg.pipeline.clone(), sui.clone(), pulsar.clone(), ll_items_rx.clone())
 			.await?;
 
 	// observe checkpoints flow:
 	// if we fell behind too far, we focus on throughput until caught up:
-	// 	spawn scan + throttle low-latency work
+	// spawn scan + throttle low-latency work
 	// else ensure completion of latest checkpoints
 	tokio::spawn({
 		let stop = stop.clone();
@@ -138,13 +145,13 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 		// 	run full scan, potentially throttle ll work
 		// also remember that cp as the last one to use for mini-scans
 		// loop:
-		// 	run microscan for any cps since last microscan relevant
+		// 	run livescan for any cps since last livescan relevant
 
 		async move {
-			let mongo = cfg.mongo.client(&cfg.lowlatency.mongo).await.unwrap();
+			let mongo = cfg.mongo.client(&cfg.pipeline.mongo).await.unwrap();
 			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
-			// get initial highest checkpoint that we'll use for starting our "microscan" strategy
+			// get initial highest checkpoint that we'll use for starting our "livescan" strategy
 			let start_cp_for_offset = loop {
 				let cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
@@ -155,8 +162,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				};
 				break cp
 			};
-			// run first microscan from last known completed checkpoint
-			let mut last_microscan_cp = coll
+			// run first livescan from last known completed checkpoint
+			let mut last_livescan_cp = coll
 				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
 				.await
 				.unwrap()
@@ -194,45 +201,45 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
-				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.fallbehindthreshold as u64 {
-					if cfg.pausepolloncatchup {
+				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.backfillthreshold as u64 {
+					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
 						pause_ll.store(250, Relaxed);
 					}
-					// run fullscan
-					let (step1completed_rx, handle) =
-						spawn_fullscan_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone(), None)
+					// run backfill
+					let (checkpointcompleted_rx, handle) =
+						spawn_backfill_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone(), None)
 							.await
 							.unwrap();
-					// continue low-latency work as soon as step 1 of the fullscan completes,
+					// We continue low-latency work as soon as the first checkpoint crawl of the backfill completes,
 					// so we incur as little unnecessary latency as possible while just waiting for
 					// some remaining items to be completed
 					tokio::spawn({
 						let pause = pause_ll.clone();
 						async move {
-							step1completed_rx.await.ok();
+							checkpointcompleted_rx.await.ok();
 							pause.store(0, Relaxed);
 						}
 					});
-					// TODO I think instead of waiting for the fullscan to finish we just want to get
+					// TODO I think instead of waiting for the backfill to finish we just want to get
 					//		the max cp returned when spawning, remember if the thing is currently still
 					//		running, and if so, just don't spawn it again... while continuing to run
 					//		the normal pipeline
 					let max_cp = handle.await.unwrap();
 					if max_cp > 0 {
 						// update all reference checkpoints
-						last_microscan_cp = max_cp;
+						last_livescan_cp = max_cp;
 					}
 					// check again
 					continue
 				}
 
-				if latest_cp == last_microscan_cp {
+				if latest_cp == last_livescan_cp {
 					// no new checkpoint available, try again
 					continue
 				}
 
-				// prepare running microscan frontend
+				// prepare running livescan frontend
 
 				// collect all currently known-processed tx digests from polling strategy
 				// XXX ideally we'd write some code that directly retrieves only the currently ready
@@ -263,7 +270,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 										// duplicate processing from polling side, probably a bug somewhere we need to fix!
 										warn!("[FIXME] duplicate transaction from polling side! ignoring, but this may indicate a bug in our own or in external code!");
 									} else if *v < 0 {
-										// it's been seen by microscan first and already "flushed",
+										// it's been seen by livescan first and already "flushed",
 										// so we need to remove this entry
 										e.remove();
 									} else {
@@ -280,9 +287,9 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				// gc: stop remembering txs added more than 120 checkpoints ago
 				txns_already_processed.drain_filter(|_, v| latest_cp as i64 - v.abs() > 120);
 
-				// spawn the microscan
-				let (mut scan_items, mut microscan_cp_control_rx) =
-					spawn_microscan(latest_cp, last_microscan_cp, &cfg, sui.clone()).await;
+				// spawn the livescan
+				let (mut scan_items, mut livescan_cp_control_rx) =
+					spawn_livescan(latest_cp, last_livescan_cp, &cfg, sui.clone()).await;
 
 				// process all items it returns, to figure out which ones may have been missed by the polling strategy
 				// and calculate and send off checkpoint control messages as we go, too
@@ -295,7 +302,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						// keep track of "already processed" txs, figure out if we want to skip this tx
 						// first, see not on try_insert() above
 						// then, we're using a negative value here, so we can discern between entries
-						// made from the polling side (positive) vs microscan side (negative)
+						// made from the polling side (positive) vs livescan side (negative)
 						match txns_already_processed.try_insert(tx, -cp_offset_marker) {
 							Ok(_) => {
 								// tx was not seen yet
@@ -304,8 +311,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 							Err(OccupiedError { entry: e, .. }) => {
 								let v = e.get();
 								if *v < 0 {
-									// duplicate processing from microscan side, probably a bug somewhere we need to fix!
-									warn!("[FIXME] duplicate transaction from microscan side! ignoring, but this may indicate a bug in our own or in external code!");
+									// duplicate processing from livescan side, probably a bug somewhere we need to fix!
+									warn!("[FIXME] duplicate transaction from livescan side! ignoring, but this may indicate a bug in our own or in external code!");
 									skip = false;
 								} else if *v > 0 {
 									// tx was already seen from polling side, so we want to skip it here
@@ -350,15 +357,15 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				}
 
 				// now store completions for all cps we skipped above due to not receiving any items for
-				while let Some((cp, num_items)) = microscan_cp_control_rx.recv().await {
+				while let Some((cp, num_items)) = livescan_cp_control_rx.recv().await {
 					if num_items == 0 {
 						ll_cp_control_tx.send((cp, num_items)).await.ok();
 					}
 				}
 
-				// we're done, the microscan is complete
+				// we're done, the livescan is complete
 				// (at least the frontend; backend items may still be processing in the background)
-				last_microscan_cp = latest_cp;
+				last_livescan_cp = latest_cp;
 			}
 		}
 	});
@@ -368,37 +375,37 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	Ok(())
 }
-
-async fn spawn_poll(
+// Crawl the entire history of checkpoints on the Sui blockchain.
+async fn spawn_checkpoint_poll(
 	cfg: &AppConfig,
 	sui: ClientPool,
 	pause: Arc<AtomicU16>,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
-	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
+	let (items_tx, items_rx) = async_channel::bounded(cfg.pipeline.queuebuffers.checkpointout);
 	tokio::spawn(do_poll(cfg.clone(), sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
 	(items_rx, observed_checkpoints_rx)
 }
 
-async fn spawn_microscan(
+async fn spawn_livescan(
 	checkpoint_max: u64,
 	stop_at_cp: u64,
 	cfg: &AppConfig,
 	sui: ClientPool,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, TReceiver<(CheckpointSequenceNumber, u32)>) {
 	let default_num_workers = sui.configs.len();
-	let num_step1_workers = cfg.lowlatency.workers.step1.unwrap_or(default_num_workers);
+	let num_checkpoint_workers = cfg.pipeline.workers.checkpoint.unwrap_or(default_num_workers);
 
 	// turn our last cp into a fake completed range, which will make the scan stop
 	let completed_checkpoint_ranges = vec![(stop_at_cp, 0)];
 
-	let (items_tx, items_rx) = async_channel::bounded(cfg.lowlatency.queuebuffers.step1out);
-	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.lowlatency.queuebuffers.cpcompletions);
-	let step_size = num_step1_workers;
-	for partition in 0..num_step1_workers {
+	let (items_tx, items_rx) = async_channel::bounded(cfg.pipeline.queuebuffers.checkpointout);
+	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.pipeline.queuebuffers.cpcompletions);
+	let step_size = num_checkpoint_workers;
+	for partition in 0..num_checkpoint_workers {
 		tokio::spawn(do_scan(
-			cfg.lowlatency.clone(),
-			IngestRoute::Microscan,
+			cfg.pipeline.clone(),
+			IngestRoute::Livescan,
 			checkpoint_max,
 			completed_checkpoint_ranges.clone(),
 			step_size,
@@ -423,17 +430,17 @@ async fn spawn_pipeline_tail(
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
 	let default_num_workers = sui.configs.len();
-	let num_step2_workers = pc.workers.step2.unwrap_or(default_num_workers);
+	let num_object_workers = pc.workers.object.unwrap_or(default_num_workers);
 	let num_mongo_workers = pc.workers.mongo.unwrap_or(default_num_workers);
-	info!("workers: step2: {}; mongo: {}", num_step2_workers, num_mongo_workers);
+	info!("workers: object: {}; mongo: {}", num_object_workers, num_mongo_workers);
 
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mongo_rx) =
 		async_channel::bounded(pc.mongo.batchsize * pc.queuebuffers.mongoinfactor * num_mongo_workers);
 
-	// step 2 workers
+	// Initialize object workers which read object changes from the checkpoint step, and fetch full object data via RPC.
 	{
-		for _ in 0..num_step2_workers {
+		for _ in 0..num_object_workers {
 			tokio::spawn({
 				let sui = sui.clone();
 				let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await?;
@@ -505,8 +512,8 @@ async fn spawn_pipeline_tail(
 							if latency != last_latency {
 								let source = match item.ingested_via {
 									IngestRoute::Poll => "P",
-									IngestRoute::Microscan => "M",
-									IngestRoute::Fullscan => "F",
+									IngestRoute::Livescan => "L",
+									IngestRoute::Backfill => "B",
 								};
 								info!("[{}] {}ms // {}ms", source, latency, completed - ts_sui);
 								last_latency = latency;
@@ -540,9 +547,10 @@ async fn spawn_pipeline_tail(
 
 	Ok((cp_control_tx, handle))
 }
-
+// The backfill pipeline crawls several checkpoints concurrently. Although this is faster for backfilling, it can overwhelm downstream systems with too many CRUD operations. It can also cause some delay for ingesting the latest checkpoint data.
+// Each backfill pipeline creates its own RocksDB instance, which is used to prevent ingesting the same data points repeatedly across multiple threads.
 #[allow(unused)]
-async fn spawn_fullscan_pipeline(
+async fn spawn_backfill_pipeline(
 	cfg: &AppConfig,
 	pc: &PipelineConfig,
 	mut sui: ClientPool,
@@ -567,8 +575,8 @@ async fn spawn_fullscan_pipeline(
 	};
 
 	let default_num_workers = sui.configs.len();
-	let num_step1_workers = pc.workers.step1.unwrap_or(default_num_workers);
-	info!("workers: step1: {}", num_step1_workers);
+	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
+	info!("workers: checkpoint: {}", num_checkpoint_workers);
 
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
@@ -601,22 +609,22 @@ async fn spawn_fullscan_pipeline(
 		}
 	};
 
-	// mpmc channel, as an easy way to balance incoming work from step 1 into multiple step 2 workers
-	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.step1out);
+	// MPMC channel, as an easy way to balance incoming work from checkpoint workers into multiple object workers.
+	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.checkpointout);
 
 	let (cp_control_tx, handle) =
 		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), pulsar, object_ids_rx).await?;
 
 	// spawn as many step 1 workers as we have RPC server urls,
 	// let each worker freely balance requests between them
-	let (step1finished_tx, step1finished_rx) = tokio::sync::oneshot::channel();
+	let (checkpointfinished_tx, checkpointfinished_rx) = tokio::sync::oneshot::channel();
 	{
-		let step_size = num_step1_workers;
-		let mut handles = Vec::with_capacity(num_step1_workers);
-		for partition in 0..num_step1_workers {
+		let step_size = num_checkpoint_workers;
+		let mut handles = Vec::with_capacity(num_checkpoint_workers);
+		for partition in 0..num_checkpoint_workers {
 			handles.push(tokio::spawn(do_scan(
 				pc.clone(),
-				IngestRoute::Fullscan,
+				IngestRoute::backfill,
 				checkpoint_max,
 				completed_checkpoint_ranges.clone(),
 				step_size,
@@ -631,11 +639,11 @@ async fn spawn_fullscan_pipeline(
 		drop(cp_control_tx);
 		tokio::spawn(async move {
 			futures::future::join_all(handles).await;
-			step1finished_tx.send(()).ok();
+			checkpointfinished_tx.send(()).ok();
 		});
 	}
 
-	Ok((step1finished_rx, handle))
+	Ok((checkpointfinished_rx, handle))
 }
 
 async fn do_walk(
@@ -694,7 +702,7 @@ async fn do_walk(
 
 		let mut query_cp = Some(cp);
 		let mut cursor = None;
-		let mut retries_left = pc.step1retries;
+		let mut retries_left = pc.checkpointretries;
 
 		loop {
 			// loop that progresses through all pages of a query which has been started by checkpoint,
@@ -707,7 +715,7 @@ async fn do_walk(
 			let page = sui.query_transaction_blocks(q, cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
 			match page {
 				Ok(page) => {
-					retries_left = pc.step1retries;
+					retries_left = pc.checkpointretries;
 					for block in page.data {
 						let block_cp = block.checkpoint.unwrap() as u64;
 						if block_cp != cp {
@@ -779,7 +787,7 @@ async fn do_walk(
 					}
 					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
-					tokio::time::sleep(Duration::from_millis(pc.step1retrytimeoutms)).await;
+					tokio::time::sleep(Duration::from_millis(pc.checkpointretrytimeoutms)).await;
 				}
 			}
 		}
@@ -905,7 +913,7 @@ async fn do_scan(
 			Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
 		);
 		let mut cursor = None;
-		let mut retries_left = pc.step1retries;
+		let mut retries_left = pc.checkpointretries;
 		let mut num_objects = 0u32;
 
 		loop {
@@ -913,7 +921,7 @@ async fn do_scan(
 			let page = sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), true).await;
 			match page {
 				Ok(page) => {
-					retries_left = pc.step1retries;
+					retries_left = pc.checkpointretries;
 					for block in page.data {
 						if let Some(changes) = block.object_changes {
 							let mut tx_digest_once = Some(block.digest);
@@ -973,12 +981,12 @@ async fn do_scan(
 				}
 				Err(err) => {
 					if retries_left == 0 {
-						warn!(error = ?err, "Exhausted all retries fetching step 1 data, leaving checkpoint {} unfinished for this run", cp);
+						warn!(error = ?err, "Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
 						break
 					}
 					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
-					tokio::time::sleep(Duration::from_millis(pc.step1retrytimeoutms)).await;
+					tokio::time::sleep(Duration::from_millis(pc.checkpointretrytimeoutms)).await;
 				}
 			}
 		}
