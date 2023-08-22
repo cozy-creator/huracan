@@ -64,8 +64,9 @@ pub struct ObjectItem {
 pub enum IngestRoute {
 	// This ObjectItem was generated in `do_poll()` and does not yet contain full object data `bytes`.
 	Poll,
-	//
+	// This ObjectItem was generated in a Livescan pipeline.
 	Livescan,
+	// This ObjectItem was generated in a Backfill pipeline.
 	Backfill,
 }
 
@@ -97,39 +98,39 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
-	let pause_ll = Arc::new(AtomicU16::new(0));
+	let pause_livescan = Arc::new(AtomicU16::new(0));
 
-	// poll for latest txs
-	// (low-latency focus)
-	let (mut poll_items, _poll_observed_cps) = spawn_checkpoint_poll(cfg, sui.clone(), pause_ll.clone()).await;
+	// Initialize livescan.
+	let (mut poll_livescan_items, _poll_observed_cps) = spawn_checkpoint_poll(cfg, sui.clone(), pause_livescan.clone()).await;
 
-	let (ll_items_tx, ll_items_rx) = async_channel::unbounded();
-	let (poll_items_transactions_tx, mut poll_items_transactions) = tokio::sync::mpsc::unbounded_channel();
+	// TODO: These unbounded channels could be the source of the memory leak.
+	let (livescan_items_tx, livescan_items_rx) = async_channel::unbounded();
+	let (poll_livescan_items_transactions_tx, mut poll_livescan_items_transactions) = tokio::sync::mpsc::unbounded_channel();
 
-	// need to accomplish two things from the poll_items stream:
-	// 1) pass on as normal input to ll pipeline immediately
-	// 2) pass all seen transaction digests on to another stream
+	// Purpose of poll_livescan_items stream:
+	// 1) Pass on as normal input to livescan pipeline immediately.
+	// 2) Pass all seen transaction digests on to another stream.
 	tokio::spawn({
-		let ll_items_tx = ll_items_tx.clone();
+		let livescan_items_tx = livescan_items_tx.clone();
 		async move {
-			while let Some(it) = poll_items.next().await {
+			while let Some(it) = poll_livescan_items.next().await {
 				// doing this first because we can copy the digest and then move the full value
 				if let Some(tx) = &it.0 {
-					if poll_items_transactions_tx.send(*tx).is_err() {
+					if poll_livescan_items_transactions_tx.send(*tx).is_err() {
 						break
 					}
 				}
-				// copy over to normal ll pipeline input channel
-				if ll_items_tx.send(it).await.is_err() {
+				// copy over to normal livescan pipeline input channel
+				if livescan_items_tx.send(it).await.is_err() {
 					break
 				}
 			}
 		}
 	});
 
-	// rest of the low-latency pipeline
+	// rest of the livescan pipeline
 	let (ll_cp_control_tx, ll_handle) =
-		spawn_pipeline_tail(cfg.clone(), cfg.pipeline.clone(), sui.clone(), pulsar.clone(), ll_items_rx.clone())
+		spawn_pipeline_tail(cfg.clone(), cfg.pipeline.clone(), sui.clone(), pulsar.clone(), livescan_items_rx.clone())
 			.await?;
 
 	// observe checkpoints flow:
@@ -142,8 +143,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 		// load latest completed checkpoint
 		// if this is too far back
-		// 	run full scan, potentially throttle ll work
-		// also remember that cp as the last one to use for mini-scans
+		// run backfill, potentially throttle livescan work
+		// also remember that checkpoint as the last one to use for mini-scans
 		// loop:
 		// 	run livescan for any checkpoints since last livescan relevant
 
@@ -204,7 +205,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.backfillthreshold as u64 {
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
-						pause_ll.store(250, Relaxed);
+						pause_livescan.store(250, Relaxed);
 					}
 					// run backfill
 					let (checkpointcompleted_rx, handle) =
@@ -215,7 +216,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					// so we incur as little unnecessary latency as possible while just waiting for
 					// some remaining items to be completed
 					tokio::spawn({
-						let pause = pause_ll.clone();
+						let pause = pause_livescan.clone();
 						async move {
 							checkpointcompleted_rx.await.ok();
 							pause.store(0, Relaxed);
@@ -243,19 +244,19 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 				// collect all currently known-processed tx digests from polling strategy
 				// XXX ideally we'd write some code that directly retrieves only the currently ready
-				// 		items from poll_items_transactions, but I don't know how to do that (yet),
+				// 		items from poll_livescan_items_transactions, but I don't know how to do that (yet),
 				//		so applying a trick of waiting for a max of X ms via tokio timer + select!
 				//		(luckily, select! knows how to poll like we need it here!)
 				let timeout = tokio::time::sleep(Duration::from_millis(10));
 				pin!(timeout);
 				// checkpoint-based marker value we use to keep track of the time at which we add values
-				// to poll_items_transactions, so we can do regular cleanup and prevent the collection
+				// to poll_livescan_items_transactions, so we can do regular cleanup and prevent the collection
 				// from growing indefinitely
 				// needs to be at >= 1 so it works with our approach below
 				let cp_offset_marker = (latest_cp - start_cp_for_offset).max(1) as i64;
 				loop {
 					tokio::select! {
-						Some(tx) = poll_items_transactions.recv() => {
+						Some(tx) = poll_livescan_items_transactions.recv() => {
 							// we're using the cp offset relative to process start as the value so we can keep track of
 							// when the entry was made, so even if we should have bugs leading to mismatching
 							// and non-removal of entries, we can still remove them on an age basis
@@ -345,7 +346,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 					// if we're not currently skipping, then we also need to forward the item to the pipeline
 					if !skip {
-						if ll_items_tx.send((tx, item)).await.is_err() {
+						if livescan_items_tx.send((tx, item)).await.is_err() {
 							break
 						}
 					}
@@ -375,6 +376,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	Ok(())
 }
+
 // Crawl the entire history of checkpoints on the Sui blockchain.
 async fn spawn_checkpoint_poll(
 	cfg: &AppConfig,
@@ -646,6 +648,7 @@ async fn spawn_backfill_pipeline(
 	Ok((checkpointfinished_rx, handle))
 }
 
+// TODO: This function is WIP
 async fn do_walk(
 	pc: PipelineConfig,
 	ingest_route: IngestRoute,
@@ -855,6 +858,7 @@ async fn traverse_checkpoints(
 	MoveAction::Continue
 }
 
+// This is the technique used in Livescan mode.
 async fn do_scan(
 	pc: PipelineConfig,
 	ingest_route: IngestRoute,
