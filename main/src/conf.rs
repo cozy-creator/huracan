@@ -18,8 +18,8 @@ pub struct PipelineConfig {
 	pub workers:             WorkersConfig,
 	pub objectqueries:       ObjectQueriesConfig,
 	pub mongo:               MongoPipelineStepConfig,
-	pub step1retries:        usize,
-	pub step1retrytimeoutms: u64,
+	pub checkpointretries:        usize,
+	pub checkpointretrytimeoutms: u64,
 	pub tracklatency:        bool,
 }
 
@@ -51,9 +51,9 @@ pub struct QueueBuffersConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkersConfig {
-	pub step1: Option<usize>,
-	pub step2: Option<usize>,
-	pub mongo: Option<usize>,
+	pub checkpoint: Option<usize>,
+	pub object:     Option<usize>,
+	pub mongo:      Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
