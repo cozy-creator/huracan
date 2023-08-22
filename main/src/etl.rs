@@ -86,6 +86,7 @@ impl Display for StepStatus {
 	}
 }
 
+// This is the entrypoint when environment variable BACKFILL_ONLY = true. This allows us to begin a highly parallel backfill starting at a specific checkpoint.
 pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
@@ -93,7 +94,9 @@ pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -
 	handle.await?;
 	Ok(())
 }
-// This is the default operation mode.
+
+// This is the default operation mode and will initialize a livescan with the most recent Sui checkpoint.
+// If our indexer is behind by "backfillthreshold", it will also initialize a separate backfill pipeline.
 pub async fn run(cfg: &AppConfig) -> Result<()> {
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
@@ -129,13 +132,13 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 	});
 
 	// rest of the livescan pipeline
-	let (ll_cp_control_tx, ll_handle) =
+	let (livescan_cp_control_tx, livescan_handle) =
 		spawn_pipeline_tail(cfg.clone(), cfg.pipeline.clone(), sui.clone(), pulsar.clone(), livescan_items_rx.clone())
 			.await?;
 
 	// observe checkpoints flow:
 	// if we fell behind too far, we focus on throughput until caught up:
-	// spawn scan + throttle low-latency work
+	// spawn scan + throttle livescan work
 	// else ensure completion of latest checkpoints
 	tokio::spawn({
 		let stop = stop.clone();
@@ -334,7 +337,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					let cp = item.cp as u64;
 					if cur_cp != cp {
 						if cur_cp != 0 {
-							if ll_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.is_err() {
+							if livescan_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.is_err() {
 								break
 							}
 						}
@@ -354,13 +357,13 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 				// final cp completion was not sent, as there was no cp change to trigger it
 				if cur_cp != 0 {
-					ll_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.ok();
+					livescan_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.ok();
 				}
 
 				// now store completions for all checkpoints we skipped above due to not receiving any items for
 				while let Some((cp, num_items)) = livescan_cp_control_rx.recv().await {
 					if num_items == 0 {
-						ll_cp_control_tx.send((cp, num_items)).await.ok();
+						livescan_cp_control_tx.send((cp, num_items)).await.ok();
 					}
 				}
 
@@ -372,7 +375,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 	});
 
 	// keep running for as long as our low-latency pipeline is running
-	ll_handle.await?;
+	livescan_handle.await?;
 
 	Ok(())
 }
