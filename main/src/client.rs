@@ -129,7 +129,7 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
 			}
-			ref e @ DynamicFieldNotFound { parent_object_id } => {
+			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
 			}
 		};
