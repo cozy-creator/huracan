@@ -20,9 +20,9 @@ pollintervalms: 100
 throughput:
   queuebuffers:
     # 1024 * 1024
-    checkpointout: 1048576
-    cpcompletions: 1024
-    mongoinfactor: 10
+    checkpointout: 1048576  # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers in backfill mode.
+    cpcompletions: 1024 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
+    mongoinfactor: 10 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
     last: 4096
   workers:
     checkpoint: 16 # Determine the number of Tokio threads issuing RPC calls for checkpoint data.
@@ -43,8 +43,8 @@ throughput:
 pipeline:
   queuebuffers:
     checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
-    cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
-    mongoinfactor: 1 #  Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
+    cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being loaded from a checkpoint scan.
+    mongoinfactor: 1 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
     last: 256
   workers:
     checkpoint: 1 # The number of checkpoint workers used in livescan mode. Not used in backfill mode.
@@ -64,30 +64,26 @@ pipeline:
 
 mongo:
   # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
-  #uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net
-  db: sui # The name of the MongoDB database.
+  # uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net (example for Atlas Cloud).
+  uri: mongodb://sui-mainnet:sui-mainnet@127.0.0.1:27017 # Example for localhost setup
+  db: sui-mainnet # The name of the MongoDB database. We recommend separate databases or separate MongoDB clusters for each environment.
   collectionbase: objects # The prefix for the MongoDB collection. Turns into: format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
 
+# Example Pulsar credentials for StreamNative Cloud.
 pulsar:
   url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
   issuer: https://auth.streamnative.cloud/
-  # o-mvqin-testnet.json, base64-encoded
-  # you probably want to override this via ENV
-  # TODO discuss whether we should not include the testnet credentials here
   credentials: file:///opt/pulsar-credentials.json
   audience: urn:sn:pulsar:o-mvqin:nonprod
   topicbase: persistent://public/default/
 
 # RPC credentials. Each network can take one or more entries to facilitate round-robin RPC invocations.
+# Only the active network config will be used. "net" in this file.
 sui:
   testnet:
     - url: https://rpc-testnet.suiscan.xyz:443
       name: suiscan
       objectsquerylimit: 50
-      # slow!
-  #    - url: https://sui-testnet.nodeinfra.com:443
-  #      name: nodeinfra
-  #      objectsquerylimit: 50
   mainnet:
     - url: https://rpc-mainnet.suiscan.xyz:443
       name: suiscan
@@ -98,10 +94,15 @@ sui:
       objectsquerylimit: 50
 
 log:
-  # fancy some colors? - disable if redirect to file is intended
-  ansi: true
-  # base-line log level
+  # Valid options are "logfile" or "stdout".
+  output: logfile
+  # Be sure to set up logrotation on your server.
+  # If you are using our automation repo, this is the location Fluent-Bit is configured to forward logs from.
+  logfilepath: "/var/log/indexer.log"
+  # Colorized output for stdout - disable if redirect to file is intended.
+  ansi: false
   level: info
+  # Add filters here.
   # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
   # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
-  #filter:
+  # filter:
