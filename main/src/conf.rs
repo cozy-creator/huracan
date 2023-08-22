@@ -42,7 +42,7 @@ pub struct MongoPipelineStepConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueueBuffersConfig {
-	pub step1out:      usize,
+	pub checkpointout: usize,
 	pub cpcompletions: usize,
 	pub mongoinfactor: usize,
 	pub last:          usize,

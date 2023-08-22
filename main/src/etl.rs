@@ -624,7 +624,7 @@ async fn spawn_backfill_pipeline(
 		for partition in 0..num_checkpoint_workers {
 			handles.push(tokio::spawn(do_scan(
 				pc.clone(),
-				IngestRoute::backfill,
+				IngestRoute::Backfill,
 				checkpoint_max,
 				completed_checkpoint_ranges.clone(),
 				step_size,
