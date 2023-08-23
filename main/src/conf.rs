@@ -139,6 +139,8 @@ pub struct AppConfig {
 	pub pulsar:              PulsarConfig,
 	pub sui:                 SuiConfig,
 	pub log:                 LogConfig,
+	pub backfillonly:	     bool,
+	pub backfillstartcheckpoint: u64,
 }
 
 impl AppConfig {

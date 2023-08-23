@@ -87,7 +87,7 @@ impl Display for StepStatus {
 }
 
 // This is the entrypoint when environment variable BACKFILL_ONLY = true. This allows us to begin a highly parallel backfill starting at a specific checkpoint.
-pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
+pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: u64) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.backfill, sui, pulsar, start_checkpoint).await?;
@@ -570,7 +570,7 @@ async fn spawn_backfill_pipeline(
 	pc: &PipelineConfig,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
-	start_checkpoint: Option<u64>,
+	start_checkpoint: u64,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	info!("IngestInfo: Spawning backfill pipeline.");
 	let db = {
@@ -989,7 +989,7 @@ async fn do_scan(
 						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else if page.next_cursor.is_none() {
-						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
+						error!("IngestError: query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page. Possible API bug.", cp, cursor);
 						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else {
@@ -998,10 +998,10 @@ async fn do_scan(
 				}
 				Err(err) => {
 					if retries_left == 0 {
-						warn!(error = ?err, "Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
+						warn!(error = ?err, "IngestError: Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
 						break
 					}
-					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
+					error!(error = ?err, "IngestError: There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
 					tokio::time::sleep(Duration::from_millis(pc.checkpointretrytimeoutms)).await;
 				}
@@ -1018,6 +1018,8 @@ async fn do_poll(
 	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
 	items: ACSender<(Option<TransactionDigest>, ObjectItem)>,
 ) {
+	info!("IngestInfo: Initializing do_poll()");
+	info!("Config: {}", cfg.checkpoint);
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
@@ -1108,7 +1110,7 @@ async fn do_poll(
 			}
 			Err(err) => {
 				let timeout_ms = 100;
-				warn!(error = ?err, "error polling tx blocks; retry #{} after {}ms timeout", retry_count, timeout_ms);
+				warn!(error = ?err, "IngestError: Error polling tx blocks; retry #{} after {}ms timeout", retry_count, timeout_ms);
 				retry_count += 1;
 				tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
 			}

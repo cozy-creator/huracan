@@ -2,7 +2,7 @@
 env: dev
 
 # Sui network.
-net: testnet
+net: mainnet
 
 # Location of RocksDB file used in backfill mode. Be sure this directory has been created with correct permissions on your system.
 rocksdbfile: /opt/indexer-data/backfill.tmp.db
@@ -15,6 +15,12 @@ pausepollonbackfill: false
 
 # Frequency at which we check for a new checkpoint on the Sui blockchain. Each interval will invoke an RPC call.
 pollintervalms: 100
+
+# Toggle backfill-only mode.
+backfillonly: false
+
+# Start the backfill from this checkpoint and work backward in time. Loaded into app as u64.
+backfillstartcheckpoint: none
 
 # These settings determine how aggressively we hammer RPC and MongoDB while backfilling Sui data. These settings are active when we are behind by backfillthreshold number of checkpoints.
 backfill:
