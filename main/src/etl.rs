@@ -205,7 +205,9 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
-				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.backfillthreshold as u64 {
+				let behind_cp = latest_cp - last_completed_cp.unwrap_or(0) as u64;
+				info!("IngestInfo: Currently behind by {} checkpoints.", behind_cp);
+				if behind_cp > cfg.backfillthreshold as u64 {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
@@ -319,7 +321,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 								let v = e.get();
 								if *v < 0 {
 									// duplicate processing from livescan side, probably a bug somewhere we need to fix!
-									warn!("[FIXME] duplicate transaction from livescan side! ignoring, but this may indicate a bug in our own or in external code!");
+									error!("IngestError: Duplicate transaction from livescan side! ignoring, but this may indicate a bug in our own or in external code!");
 									skip = false;
 								} else if *v > 0 {
 									// tx was already seen from polling side, so we want to skip it here
@@ -339,6 +341,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					// - submit previous checkpoint count if we've just changed checkpoints
 					let cp = item.cp as u64;
 					if cur_cp != cp {
+						info!("IngestInfo: Current unprocessed items in checkpoint: {}", cur_cp);
 						if cur_cp != 0 {
 							if livescan_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.is_err() {
 								break

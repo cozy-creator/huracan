@@ -8,7 +8,7 @@ net: testnet
 rocksdbfile: /opt/indexer-data/backfill.tmp.db
 
 # Number of checkpoints we need to be behind to change into backfill mode.
-backfillthreshold: 240
+backfillthreshold: 10
 
 # Determine if we want to stop indexing the latest checkpoints while backfilling.
 pausepollonbackfill: false
@@ -100,8 +100,6 @@ log:
   # Be sure to set up logrotation on your server.
   # If you are using our automation repo, this is the location Fluent-Bit is configured to forward logs from.
   logfilepath: "/var/log/indexer.log"
-  # Colorized output for stdout - disable if redirect to file is intended.
-  ansi: false
   level: info
   # Add filters here.
   # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
