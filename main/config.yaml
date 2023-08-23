@@ -40,7 +40,7 @@ backfill:
   checkpointretrytimeoutms: 500
   tracklatency: false
 
-
+# These settings determine how hard we hammer RPC in livescan mode. This is the default operation mode, which runs continuously, unless paused by a backfill operation.
 livescan:
   queuebuffers:
     checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
@@ -55,10 +55,10 @@ livescan:
     batchsize: 50 # The number of objects to request in each sui_multiGetObject() RPC invocation.
     batchwaittimeoutms: 10 # Interval between sui_multieGetObject() RPC invocations.
   mongo:
-    batchsize: 1024 # The number of objects updates sent on each bached Mongo operation.
+    batchsize: 1024 # The number of objects updates sent on each batched Mongo operation.
     batchwaittimeoutms: 10 # The interval between batched Mongo operations.
     retries: 32 # The number of retries before a Mongo operation fails.
-    zstdlevel: 1 # On-wire MongoDB setting. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
+    zstdlevel: 1 # On-wire MongoDB compression setting. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
   checkpointretries: 128 # Maximum retries to fetch an individual checkpoint. App will panic if this is exceeded.
   checkpointretrytimeoutms: 250 # Interval for checkpoint fetches.
   tracklatency: true
