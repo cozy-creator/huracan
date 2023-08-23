@@ -98,6 +98,7 @@ pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -
 // This is the default operation mode and will initialize a livescan with the most recent Sui checkpoint.
 // If our indexer is behind by "backfillthreshold", it will also initialize a separate backfill pipeline.
 pub async fn run(cfg: &AppConfig) -> Result<()> {
+	info!("IngestInfo: Initializing run().");
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
@@ -392,6 +393,7 @@ async fn spawn_checkpoint_poll(
 	sui: ClientPool,
 	pause: Arc<AtomicU16>,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
+	info!("IngestInfo: Spawning checkpoint poll");
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
 	let (items_tx, items_rx) = async_channel::bounded(cfg.livescan.queuebuffers.checkpointout);
 	tokio::spawn(do_poll(cfg.clone(), sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
@@ -404,6 +406,7 @@ async fn spawn_livescan(
 	cfg: &AppConfig,
 	sui: ClientPool,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, TReceiver<(CheckpointSequenceNumber, u32)>) {
+	info!("IngestInfo: Spawning livescan.");
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = cfg.livescan.workers.checkpoint.unwrap_or(default_num_workers);
 
@@ -438,12 +441,13 @@ async fn spawn_pipeline_tail(
 	pulsar: Pulsar<TokioExecutor>,
 	object_ids_rx: ACReceiver<(Option<TransactionDigest>, ObjectItem)>,
 ) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
+	info!("IngestInfo: Spawning pipeline tail.");
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
 	let default_num_workers = sui.configs.len();
 	let num_object_workers = pc.workers.object.unwrap_or(default_num_workers);
 	let num_mongo_workers = pc.workers.mongo.unwrap_or(default_num_workers);
-	info!("workers: object: {}; mongo: {}", num_object_workers, num_mongo_workers);
+	info!("IngestInfo: workers: object: {}; mongo: {}", num_object_workers, num_mongo_workers);
 
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mongo_rx) =
@@ -468,7 +472,7 @@ async fn spawn_pipeline_tail(
 					let stream = stream! {
 						for await (status, item) in stream {
 							if let StepStatus::Err = status {
-								retries.send(item).await.expect("failed to send retry message to pulsar!");
+								retries.send(item).await.expect("IngestError: failed to send retry message to pulsar!");
 							} else {
 								yield item;
 							}
@@ -477,7 +481,7 @@ async fn spawn_pipeline_tail(
 					// convert stream to channel
 					pin!(stream);
 					while let Some(it) = stream.next().await {
-						mongo_tx.send(it).await.expect("passing items from object data stream to mongo tokio channel");
+						mongo_tx.send(it).await.expect("IngestInfo: passing items from object data stream to mongo tokio channel");
 					}
 				}
 			});
@@ -536,7 +540,7 @@ async fn spawn_pipeline_tail(
 							continue;
 						}
 						if let StepStatus::Err = status {
-							retries.send(item).await.expect("failed to send retry message to pulsar!");
+							retries.send(item).await.expect("IngestError: failed to send retry message to pulsar!");
 						}
 						(cp, completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64))
 					},
@@ -568,6 +572,7 @@ async fn spawn_backfill_pipeline(
 	pulsar: Pulsar<TokioExecutor>,
 	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
+	info!("IngestInfo: Spawning backfill pipeline.");
 	let db = {
 		// give each pipeline its own rocksdb instance
 		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);
@@ -587,7 +592,6 @@ async fn spawn_backfill_pipeline(
 
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
-	info!("workers: checkpoint: {}", num_checkpoint_workers);
 
 	// fetch already completed checkpoints
 	let completed_checkpoint_ranges = {
@@ -1055,7 +1059,7 @@ async fn do_poll(
 				last_poll = call_start;
 				retry_count = 0;
 				if page.data.is_empty() {
-					info!("no new txs when querying with desc={} cursor={:?}, retrying immediately", desc, cursor);
+					info!("IngestInfo: No new txs when querying with desc={} cursor={:?}, retrying immediately", desc, cursor);
 					continue
 				}
 				// we want to process items in asc order
