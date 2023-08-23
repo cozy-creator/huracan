@@ -90,7 +90,7 @@ impl Display for StepStatus {
 pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
-	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.throughput, sui, pulsar, start_checkpoint).await?;
+	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.backfill, sui, pulsar, start_checkpoint).await?;
 	handle.await?;
 	Ok(())
 }
@@ -133,11 +133,11 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	// rest of the livescan pipeline
 	let (livescan_cp_control_tx, livescan_handle) =
-		spawn_pipeline_tail(cfg.clone(), cfg.pipeline.clone(), sui.clone(), pulsar.clone(), livescan_items_rx.clone())
+		spawn_pipeline_tail(cfg.clone(), cfg.livescan.clone(), sui.clone(), pulsar.clone(), livescan_items_rx.clone())
 			.await?;
 
 	// observe checkpoints flow:
-	// if we fell behind too far, we focus on throughput until caught up:
+	// if we fell behind too far, we focus on backfilling until caught up:
 	// spawn scan + throttle livescan work
 	// else ensure completion of latest checkpoints
 	tokio::spawn({
@@ -152,7 +152,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 		// 	run livescan for any checkpoints since last livescan relevant
 
 		async move {
-			let mongo = cfg.mongo.client(&cfg.pipeline.mongo).await.unwrap();
+			let mongo = cfg.mongo.client(&cfg.livescan.mongo).await.unwrap();
 			let coll = mongo.collection::<Checkpoint>(&mongo::mongo_collection_name(&cfg, "_checkpoints"));
 
 			// get initial highest checkpoint that we'll use for starting our "livescan" strategy
@@ -160,7 +160,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						warn!("failed getting latest checkpoint: {:?}", e);
+						error!("IngestError: Failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
@@ -190,7 +190,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let latest_cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						warn!("failed getting latest checkpoint: {:?}", e);
+						error!("IngestError: failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
@@ -199,20 +199,22 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
 				//		so we don't have to ask MongoDB here
 				// get last fully completed cp as a starting point for computing how far we've fallen behind
-				// and whether we need to go into high-throughput catch-up mode
+				// and whether we need to go into backfill mode
 				let last_completed_cp = coll
 					.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
 				if latest_cp - last_completed_cp.unwrap_or(0) > cfg.backfillthreshold as u64 {
+					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
 						pause_livescan.store(250, Relaxed);
+						warn!("IngestWarning: Pausing livescan pipeline.");
 					}
 					// run backfill
 					let (checkpointcompleted_rx, handle) =
-						spawn_backfill_pipeline(&cfg, &cfg.throughput, sui.clone(), pulsar.clone(), None)
+						spawn_backfill_pipeline(&cfg, &cfg.backfill, sui.clone(), pulsar.clone(), None)
 							.await
 							.unwrap();
 					// We continue low-latency work as soon as the first checkpoint crawl of the backfill completes,
@@ -239,6 +241,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				}
 
 				if latest_cp == last_livescan_cp {
+					info!("IngestInfo: No new checkpoint detected. Latest checkpoint: {}", latest_cp);
 					// no new checkpoint available, try again
 					continue
 				}
@@ -387,7 +390,7 @@ async fn spawn_checkpoint_poll(
 	pause: Arc<AtomicU16>,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
-	let (items_tx, items_rx) = async_channel::bounded(cfg.pipeline.queuebuffers.checkpointout);
+	let (items_tx, items_rx) = async_channel::bounded(cfg.livescan.queuebuffers.checkpointout);
 	tokio::spawn(do_poll(cfg.clone(), sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
 	(items_rx, observed_checkpoints_rx)
 }
@@ -399,17 +402,17 @@ async fn spawn_livescan(
 	sui: ClientPool,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, TReceiver<(CheckpointSequenceNumber, u32)>) {
 	let default_num_workers = sui.configs.len();
-	let num_checkpoint_workers = cfg.pipeline.workers.checkpoint.unwrap_or(default_num_workers);
+	let num_checkpoint_workers = cfg.livescan.workers.checkpoint.unwrap_or(default_num_workers);
 
 	// turn our last cp into a fake completed range, which will make the scan stop
 	let completed_checkpoint_ranges = vec![(stop_at_cp, 0)];
 
-	let (items_tx, items_rx) = async_channel::bounded(cfg.pipeline.queuebuffers.checkpointout);
-	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.pipeline.queuebuffers.cpcompletions);
+	let (items_tx, items_rx) = async_channel::bounded(cfg.livescan.queuebuffers.checkpointout);
+	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.livescan.queuebuffers.cpcompletions);
 	let step_size = num_checkpoint_workers;
 	for partition in 0..num_checkpoint_workers {
 		tokio::spawn(do_scan(
-			cfg.pipeline.clone(),
+			cfg.livescan.clone(),
 			IngestRoute::Livescan,
 			checkpoint_max,
 			completed_checkpoint_ranges.clone(),

@@ -4,8 +4,8 @@ env: dev
 # Sui network.
 net: testnet
 
-# Location of RocksDB file used in backfill mode.
-rocksdbfile: ./backfill.tmp.db
+# Location of RocksDB file used in backfill mode. Be sure this directory has been created with correct permissions on your system.
+rocksdbfile: /opt/indexer-data/backfill.tmp.db
 
 # Number of checkpoints we need to be behind to change into backfill mode.
 backfillthreshold: 240
@@ -16,8 +16,8 @@ pausepollonbackfill: false
 # Frequency at which we check for a new checkpoint on the Sui blockchain. Each interval will invoke an RPC call.
 pollintervalms: 100
 
-#
-throughput:
+# These settings determine how aggressively we hammer RPC and MongoDB while backfilling Sui data. These settings are active when we are behind by backfillthreshold number of checkpoints.
+backfill:
   queuebuffers:
     # 1024 * 1024
     checkpointout: 1048576  # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers in backfill mode.
@@ -40,7 +40,8 @@ throughput:
   checkpointretrytimeoutms: 500
   tracklatency: false
 
-pipeline:
+
+livescan:
   queuebuffers:
     checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
     cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being loaded from a checkpoint scan.
