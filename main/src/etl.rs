@@ -87,7 +87,7 @@ impl Display for StepStatus {
 }
 
 // This is the entrypoint when environment variable BACKFILL_ONLY = true. This allows us to begin a highly parallel backfill starting at a specific checkpoint.
-pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: u64) -> Result<()> {
+pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.backfill, sui, pulsar, start_checkpoint).await?;
@@ -570,7 +570,7 @@ async fn spawn_backfill_pipeline(
 	pc: &PipelineConfig,
 	mut sui: ClientPool,
 	pulsar: Pulsar<TokioExecutor>,
-	start_checkpoint: u64,
+	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	info!("IngestInfo: Spawning backfill pipeline.");
 	let db = {
@@ -1019,7 +1019,6 @@ async fn do_poll(
 	items: ACSender<(Option<TransactionDigest>, ObjectItem)>,
 ) {
 	info!("IngestInfo: Initializing do_poll()");
-	info!("Config: {}", cfg.checkpoint);
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),

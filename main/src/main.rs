@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 	setup_tracing(&cfg).context("cannot setup tracing")?;
 
 	if cfg.backfillonly == true {
-		let start_checkpoint = cfg.backfillstartcheckpoint;
+		let start_checkpoint = cfg.backfillstartcheckpoint.unwrap();
 		etl::run_backfill_only(&cfg, start_checkpoint).await?;
 	} else {
 		etl::run(&cfg).await.unwrap();
