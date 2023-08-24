@@ -104,17 +104,9 @@ fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 
 	// Configure tracing collector with file output.
 	if cfg.log.output == "logfile" {
-		// Create filters based on config.
-		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
-		if let Some(filters) = &cfg.log.filter {
-			for filter_str in filters {
-				filter = filter.add_directive(filter_str.parse()?);
-			}
-		}
 		let log_file = File::create(&cfg.log.logfilepath)?;
 		let collector =
 			console_subscriber::init()
-				.with_env_filter(filter)
 				.with_target(false)
 				.with_line_number(true)
 				.with_file(true)
@@ -127,16 +119,8 @@ fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 	}
 
 	if cfg.log.output == "stdout" {
-		// Create filters based on config.
-		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
-		if let Some(filters) = &cfg.log.filter {
-			for filter_str in filters {
-				filter = filter.add_directive(filter_str.parse()?);
-			}
-		}
 		let collector =
 			console_subscriber::init()
-				.with_env_filter(filter)
 				.with_target(false)
 				.with_ansi(true)
 				.with_line_number(true)
