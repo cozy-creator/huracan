@@ -1,0 +1,114 @@
+# Environment is used to prefix logs, database collections, and Pulsar topics.
+env: dev
+
+# Sui network.
+net: mainnet
+
+# Location of RocksDB file used in backfill mode. Be sure this directory has been created with correct permissions on your system.
+rocksdbfile: /opt/indexer-data/backfill.tmp.db
+
+# Number of checkpoints we need to be behind to change into backfill mode.
+backfillthreshold: 10
+
+# Determine if we want to stop indexing the latest checkpoints while backfilling.
+pausepollonbackfill: false
+
+# Frequency at which we check for a new checkpoint on the Sui blockchain. Each interval will invoke an RPC call.
+pollintervalms: 100
+
+# Toggle backfill-only mode.
+backfillonly: false
+
+# Start the backfill from this checkpoint and work backward in time. Loaded into app as u64.
+backfillstartcheckpoint: none
+
+# These settings determine how aggressively we hammer RPC and MongoDB while backfilling Sui data. These settings are active when we are behind by backfillthreshold number of checkpoints.
+backfill:
+  queuebuffers:
+    # 1024 * 1024
+    checkpointout: 1048576  # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers in backfill mode.
+    cpcompletions: 1024 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
+    mongoinfactor: 10 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
+    last: 4096
+  workers:
+    checkpoint: 16 # Determine the number of Tokio threads issuing RPC calls for checkpoint data.
+    object: 64 # Determine the number of Tokio threads issuing RPC calls for full object data. Keep in mind that we use sui_multiGetObjects(), so there are many objects fetched on each invocation.
+    mongo: 32 # Determine the number of Tokio threads issuing CRUD operations to MongoDB. Keep in mind that we batch these queries based on config below.
+  objectqueries:
+    batchsize: 50 # Determine the number of Sui objects to fetch in a single sui_multiGetObjects() request.
+    batchwaittimeoutms: 1000 # Determine interval for issuing sui_multiGetObjects() request.
+  mongo:
+    batchsize: 4096 # Determine the number of CRUD operations to issue to Mongo at each interval.
+    batchwaittimeoutms: 1000 # Determine the time between batched MongoDB operations.
+    retries: 32 # Determine the number of retries for MongoDB operations before dropping queries.
+    zstdlevel: 5 # MongoDB compression setting for on-wire data. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
+  checkpointretries: 32
+  checkpointretrytimeoutms: 500
+  tracklatency: false
+
+# These settings determine how hard we hammer RPC in livescan mode. This is the default operation mode, which runs continuously, unless paused by a backfill operation.
+livescan:
+  queuebuffers:
+    checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
+    cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being loaded from a checkpoint scan.
+    mongoinfactor: 1 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
+    last: 256
+  workers:
+    checkpoint: 1 # The number of checkpoint workers used in livescan mode. Not used in backfill mode.
+    object: 4 # The number of object workers used in livescan mode. Not used in backfill mode.
+    mongo: 4 # The number of MongoDB workers used in livescan mode. Not used in backfill mode.
+  objectqueries:
+    batchsize: 50 # The number of objects to request in each sui_multiGetObject() RPC invocation.
+    batchwaittimeoutms: 10 # Interval between sui_multieGetObject() RPC invocations.
+  mongo:
+    batchsize: 1024 # The number of objects updates sent on each batched Mongo operation.
+    batchwaittimeoutms: 10 # The interval between batched Mongo operations.
+    retries: 32 # The number of retries before a Mongo operation fails.
+    zstdlevel: 1 # On-wire MongoDB compression setting. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
+  checkpointretries: 128 # Maximum retries to fetch an individual checkpoint. App will panic if this is exceeded.
+  checkpointretrytimeoutms: 250 # Interval for checkpoint fetches.
+  tracklatency: true
+
+mongo:
+  # you need to set this via ENV as it's the only way to set your credentials if we don't want to keep them in this file
+  # uri: mongodb+srv://<user>:<pass>@sui-testnet.7b6tqsn.mongodb.net (example for Atlas Cloud).
+  uri: mongodb://sui-mainnet:sui-mainnet@127.0.0.1:27017 # Example for localhost setup
+  db: sui-mainnet # The name of the MongoDB database. We recommend separate databases or separate MongoDB clusters for each environment.
+  collectionbase: objects # The prefix for the MongoDB collection. Turns into: format!("{}_{}_{}{}", cfg.env, cfg.net, cfg.mongo.collectionbase, suffix)
+
+# Example Pulsar credentials for StreamNative Cloud.
+pulsar:
+  url: pulsar+ssl://nonprod-9ce3148a-cd24-48d0-8c29-8e6561c3e44a.aws-euw1-snci-duck-prod-snc.aws.snio.cloud:6651
+  issuer: https://auth.streamnative.cloud/
+  credentials: file:///opt/pulsar-credentials.json
+  audience: urn:sn:pulsar:o-mvqin:nonprod
+  topicbase: persistent://public/default/
+
+# RPC credentials. Each network can take one or more entries to facilitate round-robin RPC invocations.
+# Only the active network config will be used. "net" in this file.
+sui:
+  testnet:
+    - url: https://rpc-testnet.suiscan.xyz:443
+      name: suiscan
+      objectsquerylimit: 50
+  mainnet:
+    - url: https://rpc-mainnet.suiscan.xyz:443
+      name: suiscan
+      objectsquerylimit: 50
+  localnet:
+    - url: http://127.0.0.1:9000
+      name: sui-test-validator
+      objectsquerylimit: 50
+
+log:
+  tokioconsole: false
+  # Valid options are "logfile" or "stdout".
+  output: logfile
+  # Be sure to set up logrotation on your server.
+  # If you are using our automation repo, this is the location Fluent-Bit is configured to forward logs from.
+  logfilepath: "/var/log/indexer.log"
+  level: info
+  # Add filters here.
+  # my_crate=info,my_crate::my_mod=debug,[my_span]=trace
+  # see https://tracing.rs/tracing_subscriber/filter/struct.envfilter
+  # filter:

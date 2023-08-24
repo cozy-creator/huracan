@@ -16,6 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
+use console_subscriber::*;
 
 mod _prelude;
 mod client;
@@ -31,11 +32,16 @@ async fn main() -> anyhow::Result<()> {
 
 	let cfg = AppConfig::new()?;
 
-	setup_tracing(&cfg).context("cannot setup tracing")?;
+	if cfg.log.tokioconsole == true {
+		setup_console_tracing(&cfg).context("cannot setup tracing")?;
+	}
+	else {
+		setup_tracing(&cfg).context("cannot setup tracing")?;
+	}
 
-	if std::env::var("FULLSCAN_ONLY").is_ok() {
-		let start_checkpoint = std::env::var("FULLSCAN_FROM").ok().map(|v| v.parse().unwrap());
-		etl::run_fullscan_only(&cfg, start_checkpoint).await?;
+	if cfg.backfillonly == true {
+		let start_checkpoint = cfg.backfillstartcheckpoint;
+		etl::run_backfill_only(&cfg, start_checkpoint).await?;
 	} else {
 		etl::run(&cfg).await.unwrap();
 	}
@@ -43,8 +49,7 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// -- helpers
-
+// Setup default tracing mode, which does not enable tokio-console
 fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 
 	// Configure tracing collector with file output.
@@ -64,6 +69,8 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 				.with_line_number(true)
 				.with_file(true)
 				.with_writer(Mutex::new(log_file))
+				.with_thread_ids(true)
+				.with_thread_names(true)
 				.json()
 				.finish();
 		tracing::subscriber::set_global_default(collector)?;
@@ -88,6 +95,13 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 		tracing::subscriber::set_global_default(collector)?;
 	}
 
+	Ok(())
+}
+
+// Setup tracing with tokio-console enabled.
+// See: https://tokio.rs/tokio/topics/tracing-next-steps
+fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
+	console_subscriber::init();
 	Ok(())
 }
 

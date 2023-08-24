@@ -18,8 +18,8 @@ pub struct PipelineConfig {
 	pub workers:             WorkersConfig,
 	pub objectqueries:       ObjectQueriesConfig,
 	pub mongo:               MongoPipelineStepConfig,
-	pub step1retries:        usize,
-	pub step1retrytimeoutms: u64,
+	pub checkpointretries:        usize,
+	pub checkpointretrytimeoutms: u64,
 	pub tracklatency:        bool,
 }
 
@@ -42,7 +42,7 @@ pub struct MongoPipelineStepConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueueBuffersConfig {
-	pub step1out:      usize,
+	pub checkpointout: usize,
 	pub cpcompletions: usize,
 	pub mongoinfactor: usize,
 	pub last:          usize,
@@ -51,9 +51,9 @@ pub struct QueueBuffersConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkersConfig {
-	pub step1: Option<usize>,
-	pub step2: Option<usize>,
-	pub mongo: Option<usize>,
+	pub checkpoint: Option<usize>,
+	pub object:     Option<usize>,
+	pub mongo:      Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -95,6 +95,7 @@ pub struct LogConfig {
 	// Ignored unless output == "logfile".
 	// Please declare as absolute path, example: "/var/log/indexer.log"
 	pub logfilepath: String,
+	pub tokioconsole: bool,
 }
 
 impl Default for LogConfig {
@@ -104,6 +105,7 @@ impl Default for LogConfig {
 			filter: None,
 			output: "logfile".to_string(),
 			logfilepath: "/var/log/indexer.log".to_string(),
+			tokioconsole: false,
 		}
 	}
 }
@@ -130,23 +132,25 @@ pub struct AppConfig {
 	pub env:                 String,
 	pub net:                 String,
 	pub rocksdbfile:         String,
-	pub throughput:          PipelineConfig,
-	pub lowlatency:          PipelineConfig,
-	pub fallbehindthreshold: usize,
-	pub pausepolloncatchup:  bool,
+	pub backfill:            PipelineConfig,
+	pub livescan:            PipelineConfig,
+	pub backfillthreshold:   usize,
+	pub pausepollonbackfill: bool,
 	pub pollintervalms:      u64,
 	pub mongo:               MongoConfig,
 	pub pulsar:              PulsarConfig,
 	pub sui:                 SuiConfig,
 	pub log:                 LogConfig,
+	pub backfillonly:	     bool,
+	pub backfillstartcheckpoint: Option<u64>,
 }
 
 impl AppConfig {
 	pub fn new() -> anyhow::Result<Self> {
 		let mut config: AppConfig =
 			Figment::new().merge(Yaml::file("config.yaml")).merge(Env::prefixed("APP_").split("_")).extract()?;
-		config.throughput.name = "throughput".into();
-		config.lowlatency.name = "lowlatency".into();
+		config.backfill.name = "backfill".into();
+		config.livescan.name = "livescan".into();
 
 		// FIXME validate that the directory is either empty, doesn't exist or contains ONLY rocksDB data files
 		//			this is because we automatically remove the dir at runtime without further checks

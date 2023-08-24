@@ -129,20 +129,23 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
 			}
-			ref e @ DynamicFieldNotFound { parent_object_id } => {
+			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
 			}
 		};
 		return None
 	}
 	if let Some(obj) = res.data {
+		// TODO: Filter objects here
+		let package_id = obj.content.unwrap();
+		info!("object type is {}", package_id);
 		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
 		let mut bytes = Vec::with_capacity(4096);
 		let bson = bson::to_bson(&obj).unwrap();
 		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
 		return Some((obj.version, bytes))
 	}
-	warn!(object_id = ?id, "IngestError : neither .data nor .error was set in get_object response!");
+	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
 	return None
 }
 
