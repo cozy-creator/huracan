@@ -3,6 +3,10 @@ name = "indexer"
 version = "0.2.0"
 edition = "2021"
 
+# Facilitates tokio-console. Can be removed in a production system.
+[build]
+rustflags = "--cfg tokio_unstable"
+
 [dependencies]
 anyhow = "1.0"
 futures = "0.3"
