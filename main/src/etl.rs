@@ -588,8 +588,8 @@ async fn spawn_backfill_pipeline(
 		start
 	} else {
 		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
-		info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
 	};
+	info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
 
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
