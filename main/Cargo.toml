@@ -10,20 +10,19 @@ figment = { version = "0.10", features = ["yaml", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-futures = "~0.2.5"
-
-tokio = { version = "1.28.2", features = ["full"] }
+# Facilitates tokio-console to monitor channel and thread activity.
+console-subscriber = "0.1.5"
+tokio = { version = "1.28.2", features = ["full", "tracing"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "mainnet-v1.2.1" }
 sui-types = { git = "https://github.com/MystenLabs/sui", tag = "mainnet-v1.2.1" }
 # copied from sui-sdk Cargo.toml
 jsonrpsee = { git="https://github.com/wlmyng/jsonrpsee.git", rev= "b1b300784795f6a64d0fcdf8f03081a9bc38bde8", features = ["http-client"] }
 pulsar = "6.0.0"
 mongodb = { version = "2.5.0", features = ["zstd-compression"] }
-
 serde_json = "1.0"
 serde = { version = "~1.0.125", features = ["derive"] }
 dotenv = "0.15.0"
 bson = "2.6.1"
-
 macros = { path = "../macros" }
 futures-util = "0.3.28"
 async-stream = "0.3.5"
@@ -32,6 +31,5 @@ async-recursion = "1.0.4"
 rocksdb = "*"
 async-channel = "1.8.0"
 chrono = "0.4.25"
-
 # we don't need this, just a workaround to make cargo use this version to prevent version conflicts
 diesel-async = "0.2.2"

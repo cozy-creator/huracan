@@ -16,6 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
+use console_tracing::*;
 
 mod _prelude;
 mod client;
@@ -31,7 +32,12 @@ async fn main() -> anyhow::Result<()> {
 
 	let cfg = AppConfig::new()?;
 
-	setup_tracing(&cfg).context("cannot setup tracing")?;
+	if cfg.log.tokioconsole == true {
+		setup_console_tracing(&cfg).context("cannot setup tracing")?;
+	}
+	else {
+		setup_tracing(&cfg).context("cannot setup tracing")?;
+	}
 
 	if cfg.backfillonly == true {
 		let start_checkpoint = cfg.backfillstartcheckpoint;
@@ -43,8 +49,7 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// -- helpers
-
+// Setup default tracing mode, which does not enable tokio-console
 fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 
 	// Configure tracing collector with file output.
@@ -64,6 +69,8 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 				.with_line_number(true)
 				.with_file(true)
 				.with_writer(Mutex::new(log_file))
+				.with_thread_ids(true)
+				.with_thread_names(true)
 				.json()
 				.finish();
 		tracing::subscriber::set_global_default(collector)?;
@@ -79,6 +86,56 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 		}
 		let collector =
 			tracing_subscriber::fmt()
+				.with_env_filter(filter)
+				.with_target(false)
+				.with_ansi(true)
+				.with_line_number(true)
+				.with_file(true)
+				.finish();
+		tracing::subscriber::set_global_default(collector)?;
+	}
+
+	Ok(())
+}
+
+// Setup tracing with tokio-console enabled.
+// See: https://tokio.rs/tokio/topics/tracing-next-steps
+fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
+
+	// Configure tracing collector with file output.
+	if cfg.log.output == "logfile" {
+		// Create filters based on config.
+		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
+		if let Some(filters) = &cfg.log.filter {
+			for filter_str in filters {
+				filter = filter.add_directive(filter_str.parse()?);
+			}
+		}
+		let log_file = File::create(&cfg.log.logfilepath)?;
+		let collector =
+			console_subscriber::init()
+				.with_env_filter(filter)
+				.with_target(false)
+				.with_line_number(true)
+				.with_file(true)
+				.with_writer(Mutex::new(log_file))
+				.with_thread_ids(true)
+				.with_thread_names(true)
+				.json()
+				.finish();
+		tracing::subscriber::set_global_default(collector)?;
+	}
+
+	if cfg.log.output == "stdout" {
+		// Create filters based on config.
+		let mut filter = EnvFilter::from_default_env().add_directive((*cfg.log.level).into());
+		if let Some(filters) = &cfg.log.filter {
+			for filter_str in filters {
+				filter = filter.add_directive(filter_str.parse()?);
+			}
+		}
+		let collector =
+			console_subscriber::init()
 				.with_env_filter(filter)
 				.with_target(false)
 				.with_ansi(true)

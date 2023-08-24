@@ -101,6 +101,7 @@ sui:
       objectsquerylimit: 50
 
 log:
+  tokioconsole: false
   # Valid options are "logfile" or "stdout".
   output: logfile
   # Be sure to set up logrotation on your server.

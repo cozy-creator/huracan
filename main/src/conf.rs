@@ -95,6 +95,7 @@ pub struct LogConfig {
 	// Ignored unless output == "logfile".
 	// Please declare as absolute path, example: "/var/log/indexer.log"
 	pub logfilepath: String,
+	pub tokioconsole: bool,
 }
 
 impl Default for LogConfig {
@@ -104,6 +105,7 @@ impl Default for LogConfig {
 			filter: None,
 			output: "logfile".to_string(),
 			logfilepath: "/var/log/indexer.log".to_string(),
+			tokioconsole: false,
 		}
 	}
 }
