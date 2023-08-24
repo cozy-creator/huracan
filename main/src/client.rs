@@ -142,7 +142,7 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
 		return Some((obj.version, bytes))
 	}
-	warn!(object_id = ?id, "IngestError : neither .data nor .error was set in get_object response!");
+	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
 	return None
 }
 

@@ -140,7 +140,7 @@ pub struct AppConfig {
 	pub sui:                 SuiConfig,
 	pub log:                 LogConfig,
 	pub backfillonly:	     bool,
-	pub backfillstartcheckpoint: u64,
+	pub backfillstartcheckpoint: Option<u64>,
 }
 
 impl AppConfig {

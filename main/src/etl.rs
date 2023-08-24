@@ -98,7 +98,7 @@ pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -
 // This is the default operation mode and will initialize a livescan with the most recent Sui checkpoint.
 // If our indexer is behind by "backfillthreshold", it will also initialize a separate backfill pipeline.
 pub async fn run(cfg: &AppConfig) -> Result<()> {
-	info!("IngestInfo: Initializing run().");
+	info!("ExtractionInfo: Initializing run().");
 	let mut sui = cfg.sui().await?;
 	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
@@ -161,7 +161,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						error!("IngestError: Failed getting latest checkpoint: {:?}", e);
+						error!("ExtractionError: Failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
@@ -191,7 +191,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let latest_cp = match sui.get_latest_checkpoint_sequence_number().await {
 					Ok(cp) => cp as u64,
 					Err(e) => {
-						error!("IngestError: failed getting latest checkpoint: {:?}", e);
+						error!("ExtractionError: failed getting latest checkpoint: {:?}", e);
 						continue
 					}
 				};
@@ -207,7 +207,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.unwrap()
 					.map(|cp| cp._id);
 				let behind_cp = latest_cp - last_completed_cp.unwrap_or(0) as u64;
-				info!("IngestInfo: Currently behind by {} checkpoints.", behind_cp);
+				info!("ExtractionInfo: Currently behind by {} checkpoints.", behind_cp);
 				if behind_cp > cfg.backfillthreshold as u64 {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
@@ -244,7 +244,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				}
 
 				if latest_cp == last_livescan_cp {
-					info!("IngestInfo: No new checkpoint detected. Latest checkpoint: {}", latest_cp);
+					info!("ExtractionInfo: No new checkpoint detected. Latest checkpoint: {}", latest_cp);
 					// no new checkpoint available, try again
 					continue
 				}
@@ -322,7 +322,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 								let v = e.get();
 								if *v < 0 {
 									// duplicate processing from livescan side, probably a bug somewhere we need to fix!
-									error!("IngestError: Duplicate transaction from livescan side! ignoring, but this may indicate a bug in our own or in external code!");
+									error!("ExtractionError: Duplicate transaction from livescan side! ignoring, but this may indicate a bug in our own or in external code!");
 									skip = false;
 								} else if *v > 0 {
 									// tx was already seen from polling side, so we want to skip it here
@@ -342,7 +342,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					// - submit previous checkpoint count if we've just changed checkpoints
 					let cp = item.cp as u64;
 					if cur_cp != cp {
-						info!("IngestInfo: Current unprocessed items in checkpoint: {}", cur_cp);
+						info!("ExtractionInfo: Current unprocessed items in checkpoint: {}", cur_cp);
 						if cur_cp != 0 {
 							if livescan_cp_control_tx.send((cur_cp as CheckpointSequenceNumber, num_items)).await.is_err() {
 								break
@@ -393,7 +393,7 @@ async fn spawn_checkpoint_poll(
 	sui: ClientPool,
 	pause: Arc<AtomicU16>,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, UnboundedReceiver<CheckpointSequenceNumber>) {
-	info!("IngestInfo: Spawning checkpoint poll");
+	info!("ExtractionInfo: Spawning checkpoint poll");
 	let (observed_checkpoints_tx, observed_checkpoints_rx) = tokio::sync::mpsc::unbounded_channel();
 	let (items_tx, items_rx) = async_channel::bounded(cfg.livescan.queuebuffers.checkpointout);
 	tokio::spawn(do_poll(cfg.clone(), sui.clone(), pause.clone(), observed_checkpoints_tx, items_tx));
@@ -406,7 +406,7 @@ async fn spawn_livescan(
 	cfg: &AppConfig,
 	sui: ClientPool,
 ) -> (ACReceiver<(Option<TransactionDigest>, ObjectItem)>, TReceiver<(CheckpointSequenceNumber, u32)>) {
-	info!("IngestInfo: Spawning livescan.");
+	info!("ExtractionInfo: Spawning livescan.");
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = cfg.livescan.workers.checkpoint.unwrap_or(default_num_workers);
 
@@ -441,13 +441,13 @@ async fn spawn_pipeline_tail(
 	pulsar: Pulsar<TokioExecutor>,
 	object_ids_rx: ACReceiver<(Option<TransactionDigest>, ObjectItem)>,
 ) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
-	info!("IngestInfo: Spawning pipeline tail.");
+	info!("ExtractionInfo: Spawning pipeline tail.");
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
 
 	let default_num_workers = sui.configs.len();
 	let num_object_workers = pc.workers.object.unwrap_or(default_num_workers);
 	let num_mongo_workers = pc.workers.mongo.unwrap_or(default_num_workers);
-	info!("IngestInfo: workers: object: {}; mongo: {}", num_object_workers, num_mongo_workers);
+	info!("ExtractionInfo: workers: object: {}; mongo: {}", num_object_workers, num_mongo_workers);
 
 	// mostly we want to buffer up to mongo batch size items smoothly, assuming writes to mongo from a single writer will be fast enough
 	let (mongo_tx, mongo_rx) =
@@ -472,7 +472,7 @@ async fn spawn_pipeline_tail(
 					let stream = stream! {
 						for await (status, item) in stream {
 							if let StepStatus::Err = status {
-								retries.send(item).await.expect("IngestError: failed to send retry message to pulsar!");
+								retries.send(item).await.expect("ExtractionError: failed to send retry message to pulsar!");
 							} else {
 								yield item;
 							}
@@ -481,7 +481,7 @@ async fn spawn_pipeline_tail(
 					// convert stream to channel
 					pin!(stream);
 					while let Some(it) = stream.next().await {
-						mongo_tx.send(it).await.expect("IngestInfo: passing items from object data stream to mongo tokio channel");
+						mongo_tx.send(it).await.expect("ExtractionInfo: passing items from object data stream to mongo tokio channel");
 					}
 				}
 			});
@@ -540,7 +540,7 @@ async fn spawn_pipeline_tail(
 							continue;
 						}
 						if let StepStatus::Err = status {
-							retries.send(item).await.expect("IngestError: failed to send retry message to pulsar!");
+							retries.send(item).await.expect("ExtractionError: failed to send retry message to pulsar!");
 						}
 						(cp, completions_left.entry(cp).and_modify(|n| *n -= 1).or_insert(-1i64))
 					},
@@ -572,7 +572,7 @@ async fn spawn_backfill_pipeline(
 	pulsar: Pulsar<TokioExecutor>,
 	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
-	info!("IngestInfo: Spawning backfill pipeline.");
+	info!("ExtractionInfo: Spawning backfill pipeline.");
 	let db = {
 		// give each pipeline its own rocksdb instance
 		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);
@@ -587,7 +587,8 @@ async fn spawn_backfill_pipeline(
 	let checkpoint_max = if let Some(start) = start_checkpoint {
 		start
 	} else {
-		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
+		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+		info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
 	};
 
 	let default_num_workers = sui.configs.len();
@@ -625,13 +626,13 @@ async fn spawn_backfill_pipeline(
 	};
 
 	// MPMC channel, as an easy way to balance incoming work from checkpoint workers into multiple object workers.
+	info!("ExtractionInfo: Initializing Tokio channel for object workers with bound limit {}", pc.queuebuffers.checkpointout);
 	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.checkpointout);
 
 	let (cp_control_tx, handle) =
 		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), pulsar, object_ids_rx).await?;
 
-	// spawn as many step 1 workers as we have RPC server urls,
-	// let each worker freely balance requests between them
+	info!("Initializing {} number of backfill workers.", num_checkpoint_workers);
 	let (checkpointfinished_tx, checkpointfinished_rx) = tokio::sync::oneshot::channel();
 	{
 		let step_size = num_checkpoint_workers;
@@ -790,7 +791,7 @@ async fn do_walk(
 					if !page.has_next_page {
 						break
 					} else if page.next_cursor.is_none() {
-						warn!("[[sui api issue?]] query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page!", cp, cursor);
+						warn!("ExtractionError: query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page. Posslbie Sui API bug.", cp, cursor);
 						break
 					} else {
 						cursor = page.next_cursor;
@@ -798,10 +799,10 @@ async fn do_walk(
 				}
 				Err(err) => {
 					if retries_left == 0 {
-						warn!(error = ?err, "Exhausted all retries fetching step 1 data, leaving checkpoint {} unfinished for this run", cp);
+						warn!(error = ?err, "ExtractionError: Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
 						break
 					}
-					warn!(error = ?err, "There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
+					warn!(error = ?err, "ExtractionError: There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
 					tokio::time::sleep(Duration::from_millis(pc.checkpointretrytimeoutms)).await;
 				}
@@ -824,6 +825,7 @@ async fn traverse_checkpoints(
 	num_objects: &mut u32,
 	next_cp: u64,
 ) -> MoveAction {
+	info!("ExtractionInfo: Initializing traverse_checkpoints()");
 	for cp in *cp..next_cp {
 		// we're done with this previous cp
 		// send control message about number of expected object tasks from it
@@ -871,7 +873,7 @@ async fn traverse_checkpoints(
 	MoveAction::Continue
 }
 
-// This is the technique used in Livescan mode.
+// This is the technique used in Livescan and Backfill mode.
 async fn do_scan(
 	pc: PipelineConfig,
 	ingest_route: IngestRoute,
@@ -884,6 +886,7 @@ async fn do_scan(
 	object_ids_tx: ACSender<(Option<TransactionDigest>, ObjectItem)>,
 	cp_control_tx: TSender<(CheckpointSequenceNumber, u32)>,
 ) {
+	info!("ExtractionInfo: Initializing do_scan()");
 	let stop = ctrl_c_bool();
 	let mut completed_iter = completed_checkpoint_ranges.iter();
 	let mut completed_range = completed_iter.next();
@@ -989,7 +992,7 @@ async fn do_scan(
 						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else if page.next_cursor.is_none() {
-						error!("IngestError: query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page. Possible API bug.", cp, cursor);
+						error!("ExtractionError: query_transaction_blocks({}, {:?}) page.has_next_page == true, but there is no page.next_cursor! continuing as if no next page. Possible API bug.", cp, cursor);
 						cp_control_tx.send((cp as CheckpointSequenceNumber, num_objects)).await.unwrap();
 						break
 					} else {
@@ -998,10 +1001,10 @@ async fn do_scan(
 				}
 				Err(err) => {
 					if retries_left == 0 {
-						warn!(error = ?err, "IngestError: Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
+						warn!(error = ?err, "ExtractionError: Exhausted all retries fetching checkpoint data, leaving checkpoint {} unfinished for this run", cp);
 						break
 					}
-					error!(error = ?err, "IngestError: There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
+					error!(error = ?err, "ExtractionError: There was an error reading object changes... retrying (retry #{}) after short timeout", retries_left);
 					retries_left -= 1;
 					tokio::time::sleep(Duration::from_millis(pc.checkpointretrytimeoutms)).await;
 				}
@@ -1018,7 +1021,7 @@ async fn do_poll(
 	observed_checkpoints_tx: UnboundedSender<CheckpointSequenceNumber>,
 	items: ACSender<(Option<TransactionDigest>, ObjectItem)>,
 ) {
-	info!("IngestInfo: Initializing do_poll()");
+	info!("ExtractionInfo: Initializing do_poll()");
 	let q = SuiTransactionBlockResponseQuery::new(
 		None,
 		Some(SuiTransactionBlockResponseOptions::new().with_object_changes()),
@@ -1060,7 +1063,7 @@ async fn do_poll(
 				last_poll = call_start;
 				retry_count = 0;
 				if page.data.is_empty() {
-					info!("IngestInfo: No new txs when querying with desc={} cursor={:?}, retrying immediately", desc, cursor);
+					info!("ExtractionInfo: No new txs when querying with desc={} cursor={:?}, retrying immediately", desc, cursor);
 					continue
 				}
 				// we want to process items in asc order
@@ -1109,7 +1112,7 @@ async fn do_poll(
 			}
 			Err(err) => {
 				let timeout_ms = 100;
-				warn!(error = ?err, "IngestError: Error polling tx blocks; retry #{} after {}ms timeout", retry_count, timeout_ms);
+				warn!(error = ?err, "ExtractionError: Error polling tx blocks; retry #{} after {}ms timeout", retry_count, timeout_ms);
 				retry_count += 1;
 				tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
 			}
