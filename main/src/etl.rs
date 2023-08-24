@@ -587,7 +587,7 @@ async fn spawn_backfill_pipeline(
 	let checkpoint_max = if let Some(start) = start_checkpoint {
 		start
 	} else {
-		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64;
+		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
 	};
 	info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
 
