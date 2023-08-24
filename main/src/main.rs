@@ -16,7 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
-use console_tracing::*;
+use console_subscriber::*;
 
 mod _prelude;
 mod client;

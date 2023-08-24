@@ -136,6 +136,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		return None
 	}
 	if let Some(obj) = res.data {
+		// TODO: Filter objects here
+		let package_id = obj.content.unwrap();
+		info!("object type is {}", package_id);
 		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
 		let mut bytes = Vec::with_capacity(4096);
 		let bson = bson::to_bson(&obj).unwrap();
