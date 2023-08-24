@@ -101,34 +101,7 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 // Setup tracing with tokio-console enabled.
 // See: https://tokio.rs/tokio/topics/tracing-next-steps
 fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
-
-	// Configure tracing collector with file output.
-	if cfg.log.output == "logfile" {
-		let log_file = File::create(&cfg.log.logfilepath)?;
-		let collector =
-			console_subscriber::init()
-				.with_target(false)
-				.with_line_number(true)
-				.with_file(true)
-				.with_writer(Mutex::new(log_file))
-				.with_thread_ids(true)
-				.with_thread_names(true)
-				.json()
-				.finish();
-		tracing::subscriber::set_global_default(collector)?;
-	}
-
-	if cfg.log.output == "stdout" {
-		let collector =
-			console_subscriber::init()
-				.with_target(false)
-				.with_ansi(true)
-				.with_line_number(true)
-				.with_file(true)
-				.finish();
-		tracing::subscriber::set_global_default(collector)?;
-	}
-
+	console_subscriber::init();
 	Ok(())
 }
 
