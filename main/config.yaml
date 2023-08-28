@@ -8,7 +8,7 @@ net: mainnet
 rocksdbfile: /opt/indexer-data/backfill.tmp.db
 
 # Number of checkpoints we need to be behind to change into backfill mode.
-backfillthreshold: 10
+backfillthreshold: 3
 
 # Determine if we want to stop indexing the latest checkpoints while backfilling.
 pausepollonbackfill: false
@@ -26,21 +26,21 @@ backfillstartcheckpoint: none
 backfill:
   queuebuffers:
     # 1024 * 1024
-    checkpointout: 1048576  # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers in backfill mode.
-    cpcompletions: 1024 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
-    mongoinfactor: 10 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
-    last: 4096
+    checkpointout: 4  # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers in backfill mode.
+    cpcompletions: 4 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being scanned from a checkoint scan.
+    mongoinfactor: 1 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
+    last: 1
   workers:
-    checkpoint: 16 # Determine the number of Tokio threads issuing RPC calls for checkpoint data.
-    object: 64 # Determine the number of Tokio threads issuing RPC calls for full object data. Keep in mind that we use sui_multiGetObjects(), so there are many objects fetched on each invocation.
-    mongo: 32 # Determine the number of Tokio threads issuing CRUD operations to MongoDB. Keep in mind that we batch these queries based on config below.
+    checkpoint: 4 # Determine the number of Tokio threads issuing RPC calls for checkpoint data.
+    object: 8 # Determine the number of Tokio threads issuing RPC calls for full object data. Keep in mind that we use sui_multiGetObjects(), so there are many objects fetched on each invocation.
+    mongo: 2 # Determine the number of Tokio threads issuing CRUD operations to MongoDB. Keep in mind that we batch these queries based on config below.
   objectqueries:
     batchsize: 50 # Determine the number of Sui objects to fetch in a single sui_multiGetObjects() request.
     batchwaittimeoutms: 1000 # Determine interval for issuing sui_multiGetObjects() request.
   mongo:
     batchsize: 4096 # Determine the number of CRUD operations to issue to Mongo at each interval.
     batchwaittimeoutms: 1000 # Determine the time between batched MongoDB operations.
-    retries: 32 # Determine the number of retries for MongoDB operations before dropping queries.
+    retries: 4 # Determine the number of retries for MongoDB operations before dropping queries.
     zstdlevel: 5 # MongoDB compression setting for on-wire data. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
   checkpointretries: 32
   checkpointretrytimeoutms: 500
@@ -49,23 +49,23 @@ backfill:
 # These settings determine how hard we hammer RPC in livescan mode. This is the default operation mode, which runs continuously, unless paused by a backfill operation.
 livescan:
   queuebuffers:
-    checkpointout: 2048 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
-    cpcompletions: 2048 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being loaded from a checkpoint scan.
+    checkpointout: 2 # The bounded capacity of the async channel which passes messages between checkpoint workers and object workers.
+    cpcompletions: 2 # The bounded capacity of a synchronous Tokio channel which handles backpressure between checkpoint workers and object workers. This is the maximum number of pending objects requiring RPC lookup after being loaded from a checkpoint scan.
     mongoinfactor: 1 # Multiplier used for a bounded Tokio channel which passes full Sui objects to the MongoDB writer channel. This value is multiplied by mongo.batchsize to determine the upper bound on the channel.
-    last: 256
+    last: 1
   workers:
-    checkpoint: 1 # The number of checkpoint workers used in livescan mode. Not used in backfill mode.
-    object: 4 # The number of object workers used in livescan mode. Not used in backfill mode.
-    mongo: 4 # The number of MongoDB workers used in livescan mode. Not used in backfill mode.
+    checkpoint: 4 # The number of checkpoint workers used in livescan mode. Not used in backfill mode.
+    object: 8 # The number of object workers used in livescan mode. Not used in backfill mode.
+    mongo: 2 # The number of MongoDB workers used in livescan mode. Not used in backfill mode.
   objectqueries:
     batchsize: 50 # The number of objects to request in each sui_multiGetObject() RPC invocation.
     batchwaittimeoutms: 10 # Interval between sui_multieGetObject() RPC invocations.
   mongo:
     batchsize: 1024 # The number of objects updates sent on each batched Mongo operation.
     batchwaittimeoutms: 10 # The interval between batched Mongo operations.
-    retries: 32 # The number of retries before a Mongo operation fails.
+    retries: 4 # The number of retries before a Mongo operation fails.
     zstdlevel: 1 # On-wire MongoDB compression setting. See: https://www.mongodb.com/docs/manual/reference/glossary/#std-term-zlib
-  checkpointretries: 128 # Maximum retries to fetch an individual checkpoint. App will panic if this is exceeded.
+  checkpointretries: 8 # Maximum retries to fetch an individual checkpoint. App will panic if this is exceeded.
   checkpointretrytimeoutms: 250 # Interval for checkpoint fetches.
   tracklatency: true
 
@@ -92,8 +92,11 @@ sui:
       name: suiscan
       objectsquerylimit: 50
   mainnet:
-    - url: https://rpc-mainnet.suiscan.xyz:443
-      name: suiscan
+#    - url: https://rpc-mainnet.suiscan.xyz:443
+#      name: suiscan
+#      objectsquerylimit: 50
+    - url: http://192.81.130.55:9000
+      name: huracan-mainnet
       objectsquerylimit: 50
   localnet:
     - url: http://127.0.0.1:9000
