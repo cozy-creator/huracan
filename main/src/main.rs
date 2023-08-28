@@ -16,7 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
-use console_subscriber::*;
+use tokio::sync::OnceCell;
 
 mod _prelude;
 mod client;
@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
 		etl::run(&cfg).await.unwrap();
 	}
 
+	setup_config_singleton(&cfg).context("cannot setup config singleton")?;
 	Ok(())
 }
 
@@ -94,8 +95,8 @@ fn setup_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 				.finish();
 		tracing::subscriber::set_global_default(collector)?;
 	}
-
 	Ok(())
+
 }
 
 // Setup tracing with tokio-console enabled.
@@ -105,6 +106,7 @@ fn setup_console_tracing(cfg: &AppConfig) -> anyhow::Result<()> {
 	Ok(())
 }
 
+// Ensure Tokio threads are drained on a smooth shutdown
 pub fn ctrl_c_bool() -> Arc<AtomicBool> {
 	let stop = Arc::new(AtomicBool::new(false));
 	tokio::spawn({

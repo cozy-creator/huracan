@@ -34,11 +34,12 @@ use crate::{
 	_prelude::*,
 	client,
 	client::{parse_get_object_response, ClientPool},
-	conf::{AppConfig, PipelineConfig},
+	conf::{AppConfig, PipelineConfig, APPCONFIG},
 	ctrl_c_bool, mongo,
 	mongo::{mongo_checkpoint, Checkpoint},
 	utils::make_descending_ranges,
 };
+
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)

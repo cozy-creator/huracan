@@ -100,6 +100,17 @@ sui:
       name: sui-test-validator
       objectsquerylimit: 50
 
+blacklist:
+  enabled: false
+  packages:
+#    Example: This Regex would blacklist all Coin Metadata objects
+#    - 0x2::coin::CoinMetadata<(.*)>
+
+whitelist:
+  enabled: true
+  packages:
+#   Example: This Regex would whitelist all Sui coin objects and exlude everything else.
+#    - 0x2::coin::Coin<0x2::sui::SUI>
 log:
   tokioconsole: false
   # Valid options are "logfile" or "stdout".

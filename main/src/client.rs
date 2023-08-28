@@ -10,13 +10,15 @@ use sui_sdk::{
 	},
 	SuiClient, SuiClientBuilder,
 };
+use sui_sdk::rpc_types::SuiData;
+
 use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::time::Instant;
-
-use crate::{_prelude::*, conf::RpcProviderConfig};
+use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_string_against_regex, main::APPCONFIG};
+use crate::conf::get_config_singleton;
 
 #[derive(Clone)]
 pub struct ClientPool {
@@ -136,14 +138,18 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		return None
 	}
 	if let Some(obj) = res.data {
-		// TODO: Filter objects here
-		let package_id = obj.content.unwrap();
-		info!("object type is {}", package_id);
-		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
-		let mut bytes = Vec::with_capacity(4096);
-		let bson = bson::to_bson(&obj).unwrap();
-		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
-		return Some((obj.version, bytes))
+		let obj_type = obj.object_type().ok()?;
+		info!("Outside whitelist conditional object type is: {}", &obj_type);
+		let str_obj_type = serde_json::to_string(&obj_type)?;
+		let whitelist = get_config_singleton().whitelist.clone().packages;
+		if whitelist != None && whitelist.enabled == true && check_string_against_regex(&str_obj_type, &whitelist.unwrap()) == true {
+			info!("Inside whitelist conditional type is: {}", &str_obj_type);
+			let mut bytes = Vec::with_capacity(4096);
+			let bson = bson::to_bson(&obj).unwrap();
+			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+			return Some((obj.version, bytes))
+		}
+
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
 	return None
