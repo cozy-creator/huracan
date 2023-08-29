@@ -213,13 +213,10 @@ impl AppConfig {
 pub(crate) static APPCONFIG: OnceCell<AppConfig> = OnceCell::const_new();
 
 // Setup config singleton
-pub async fn setup_config_singleton(cfg: &AppConfig) -> Result<&'static AppConfig, String> {
+pub async fn setup_config_singleton(cfg: &AppConfig) -> &'static AppConfig {
 	APPCONFIG.get_or_init(|| async {
 		Ok(cfg.clone())
-	}).await.expect("ConfigError: Unable to initialize config singleton");
-
-	// APPCONFIG.get_or_try_init(|| Ok(cfg.clone())).await.expect("ConfigError: Unable to initialize config singleton");
-	Ok(APPCONFIG.get().unwrap())
+	}).await
 }
 
 pub fn get_config_singleton() -> &'static AppConfig {
