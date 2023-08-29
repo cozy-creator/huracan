@@ -34,7 +34,7 @@ use crate::{
 	_prelude::*,
 	client,
 	client::{parse_get_object_response, ClientPool},
-	conf::{AppConfig, PipelineConfig, APPCONFIG},
+	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool, mongo,
 	mongo::{mongo_checkpoint, Checkpoint},
 	utils::make_descending_ranges,

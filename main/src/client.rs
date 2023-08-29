@@ -14,7 +14,7 @@ use sui_types::{
 	messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::time::Instant;
-use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_string_against_regex, main::APPCONFIG};
+use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_string_against_regex};
 use crate::conf::get_config_singleton;
 
 #[derive(Clone)]

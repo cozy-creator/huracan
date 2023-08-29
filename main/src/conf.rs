@@ -6,7 +6,6 @@ use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Database,
 };
-use regex::Regex;
 use tokio::sync::OnceCell;
 
 use crate::{_prelude::*, client::ClientPool};
@@ -215,7 +214,7 @@ pub(crate) static APPCONFIG: OnceCell<AppConfig> = OnceCell::const_new();
 // Setup config singleton
 pub async fn setup_config_singleton(cfg: &AppConfig) -> &'static AppConfig {
 	APPCONFIG.get_or_init(|| async {
-		Ok(cfg.clone())
+		cfg.clone()
 	}).await
 }
 

@@ -39,6 +39,8 @@ async fn main() -> anyhow::Result<()> {
 		setup_tracing(&cfg).context("cannot setup tracing")?;
 	}
 
+	setup_config_singleton(&cfg).await;
+
 	if cfg.backfillonly == true {
 		let start_checkpoint = cfg.backfillstartcheckpoint;
 		etl::run_backfill_only(&cfg, start_checkpoint).await?;
@@ -46,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 		etl::run(&cfg).await.unwrap();
 	}
 
-	setup_config_singleton(&cfg).await.expect("ConfigError: cannot setup config singleton");
+
 	Ok(())
 }
 
