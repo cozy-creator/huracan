@@ -1,5 +1,4 @@
 use std::time::Duration;
-
 use macros::with_client_rotation;
 use sui_sdk::{
 	apis::ReadApi,
@@ -10,8 +9,6 @@ use sui_sdk::{
 	},
 	SuiClient, SuiClientBuilder,
 };
-use sui_sdk::rpc_types::SuiData;
-
 use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
@@ -140,16 +137,16 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 	if let Some(obj) = res.data {
 		let obj_type = obj.object_type().ok()?;
 		info!("Outside whitelist conditional object type is: {}", &obj_type);
-		let str_obj_type = serde_json::to_string(&obj_type)?;
-		let whitelist = get_config_singleton().whitelist.clone().packages;
-		if whitelist != None && whitelist.enabled == true && check_string_against_regex(&str_obj_type, &whitelist.unwrap()) == true {
+		let str_obj_type = serde_json::to_string(&obj_type).ok()?;
+		let whitelist_enabled = get_config_singleton().whitelist.clone().enabled;
+		let whitelist_packages = get_config_singleton().whitelist.clone().packages;
+		if whitelist_packages != None && whitelist_enabled == true && check_string_against_regex(&str_obj_type, whitelist_packages.unwrap()) == true {
 			info!("Inside whitelist conditional type is: {}", &str_obj_type);
 			let mut bytes = Vec::with_capacity(4096);
 			let bson = bson::to_bson(&obj).unwrap();
 			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
 			return Some((obj.version, bytes))
 		}
-
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
 	return None

@@ -16,7 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
-use tokio::sync::OnceCell;
+use crate::conf::setup_config_singleton;
 
 mod _prelude;
 mod client;

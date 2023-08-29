@@ -103,12 +103,16 @@ sui:
       name: sui-test-validator
       objectsquerylimit: 50
 
+# Package IDs to exclude from indexing. Uses Regex matching.
+# Leaving this and the whitelist disabled will index everything.
 blacklist:
   enabled: false
   packages:
 #    Example: This Regex would blacklist all Coin Metadata objects
 #    - 0x2::coin::CoinMetadata<(.*)>
 
+# Package IDs to include in indexing. Uses Regex matching.
+# Leaving this and the blacklist disabled will index everything.
 whitelist:
   enabled: true
   packages:

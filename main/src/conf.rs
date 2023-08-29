@@ -6,6 +6,7 @@ use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Database,
 };
+use regex::Regex;
 use tokio::sync::OnceCell;
 
 use crate::{_prelude::*, client::ClientPool};
@@ -129,9 +130,9 @@ pub struct SuiConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Whitelist {
+pub struct Whitelist{
 	pub enabled:  bool,
-	pub packages: Option<[str]>,
+	pub packages: Option<Vec<String>>,
 }
 
 impl Default for Whitelist {
@@ -144,7 +145,7 @@ impl Default for Whitelist {
 #[serde(deny_unknown_fields)]
 pub struct Blacklist {
 	pub enabled:  bool,
-	pub packages: Option<str>,
+	pub packages: Option<Vec<String>>,
 }
 
 impl Default for Blacklist {
@@ -212,8 +213,8 @@ impl AppConfig {
 pub(crate) static APPCONFIG: OnceCell<AppConfig> = OnceCell::new();
 
 // Setup config singleton
-pub fn setup_config_singleton(cfg: &AppConfig) -> Result<&'static AppConfig, String> {
-	APPCONFIG.get_or_try_init(|| Ok(cfg.clone()))?;
+pub async fn setup_config_singleton(cfg: &AppConfig) -> Result<&'static AppConfig, String> {
+	APPCONFIG.get_or_try_init(|| Ok(cfg.clone())).await.expect("ConfigError: Unable to initialize config singleton");
 	Ok(APPCONFIG.get().unwrap())
 }
 

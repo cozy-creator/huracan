@@ -33,9 +33,9 @@ pub fn make_descending_ranges(mut numbers: Vec<u64>) -> Vec<(u64, u64)> {
 /// # Returns
 ///
 /// * `bool` - Returns `true` if the string matches any regex expression, `false` otherwise.
-pub(crate) fn check_string_against_regex(input: &str, regex_vec: &[str]) -> bool {
+pub(crate) fn check_string_against_regex(input: &str, regex_vec: Vec<String>) -> bool {
 	for regex_str in regex_vec {
-		let regex = Regex::new(regex_str).unwrap();
+		let regex = Regex::new(&*regex_str).unwrap();
 		if regex.is_match(input) {
 			return true;
 		}
