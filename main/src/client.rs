@@ -136,10 +136,20 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		return None
 	}
 	if let Some(obj) = res.data {
+		let obj_type = obj.object_type().ok()?;
+		// Handle whitelist packages.
 		let whitelist_enabled = get_config_singleton().whitelist.clone().enabled;
 		let whitelist_packages = get_config_singleton().whitelist.clone().packages;
-		let obj_type = obj.object_type().ok()?;
 		if whitelist_packages != None && whitelist_enabled == true && check_obj_type_from_string_vec(&obj_type, whitelist_packages.unwrap()) == true {
+			let mut bytes = Vec::with_capacity(4096);
+			let bson = bson::to_bson(&obj).unwrap();
+			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+			return Some((obj.version, bytes))
+		}
+		// Handle blacklist packages.
+		let blacklist_enabled = get_config_singleton().blacklist.clone().enabled;
+		let blacklist_packages = get_config_singleton().blacklist.clone().packages;
+		if blacklist_packages != None && blacklist_enabled == true && check_obj_type_from_string_vec(&obj_type, blacklist_packages.unwrap()) == false {
 			let mut bytes = Vec::with_capacity(4096);
 			let bson = bson::to_bson(&obj).unwrap();
 			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
