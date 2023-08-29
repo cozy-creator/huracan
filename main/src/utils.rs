@@ -1,4 +1,7 @@
+use std::str::FromStr;
 use regex::Regex;
+use sui_types::base_types::ObjectType;
+
 
 /// ranges are inclusive on both sides
 pub fn make_descending_ranges(mut numbers: Vec<u64>) -> Vec<(u64, u64)> {
@@ -33,12 +36,16 @@ pub fn make_descending_ranges(mut numbers: Vec<u64>) -> Vec<(u64, u64)> {
 /// # Returns
 ///
 /// * `bool` - Returns `true` if the string matches any regex expression, `false` otherwise.
-pub(crate) fn check_string_against_regex(input: &str, regex_vec: Vec<String>) -> bool {
-	for regex_str in regex_vec {
-		let regex = Regex::new(&*regex_str).unwrap();
-		if regex.is_match(input) {
+pub(crate) fn check_string_against_regex(input_obj_type: &ObjectType, obj_type_string_vec: Vec<String>) -> bool {
+	for item in obj_type_string_vec {
+		let item_obj_type = ObjectType::from_str(&item).Ok();
+		if input_obj_type == item_obj_type {
 			return true;
 		}
+		// let regex = Regex::new(&*regex_str).unwrap();
+		// if regex.is_match(input) {
+		// 	return true;
+		// }
 	}
 	false
 }

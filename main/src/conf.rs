@@ -219,10 +219,8 @@ pub async fn setup_config_singleton(cfg: &AppConfig) -> &'static AppConfig {
 }
 
 pub fn get_config_singleton() -> &'static AppConfig {
-	APPCONFIG.get().expect("config singleton not initialized")
+	APPCONFIG.get().expect("ConfigError: config singleton not initialized")
 }
-
-// -- helpers
 
 #[derive(Clone, Debug)]
 pub struct CLevel(pub Level);
