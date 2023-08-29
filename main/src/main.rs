@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
 		etl::run(&cfg).await.unwrap();
 	}
 
-	setup_config_singleton(&cfg).context("cannot setup config singleton")?;
+	setup_config_singleton(&cfg).await.expect("ConfigError: cannot setup config singleton");
 	Ok(())
 }
 
