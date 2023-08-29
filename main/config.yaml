@@ -19,8 +19,8 @@ pollintervalms: 100
 # Toggle backfill-only mode.
 backfillonly: false
 
-# Start the backfill from this checkpoint and work backward in time. Loaded into app as u64.
-backfillstartcheckpoint: none
+# Start the backfill from this checkpoint and work backward in time. Loaded into app as u64. Ignored if backfillonly is false.
+backfillstartcheckpoint: 1
 
 # These settings determine how aggressively we hammer RPC and MongoDB while backfilling Sui data. These settings are active when we are behind by backfillthreshold number of checkpoints.
 backfill:
@@ -116,7 +116,7 @@ blacklist:
 whitelist:
   enabled: true
   packages:
-#   Example: This Regex would whitelist all Sui coin objects and exlude everything else.
+#   Example: This Regex would whitelist all Sui coin objects and exclude everything else.
 #    - 0x2::coin::Coin<0x2::sui::SUI>
 log:
   tokioconsole: false
