@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use regex::Regex;
 use sui_types::base_types::ObjectType;
 
 
@@ -26,6 +25,7 @@ pub fn make_descending_ranges(mut numbers: Vec<u64>) -> Vec<(u64, u64)> {
 	ranges
 }
 
+// This function is used to compare object types from RPC request with object types in config file (whitelist and blacklist).
 pub(crate) fn check_obj_type_from_string_vec(input_obj_type: &ObjectType, obj_type_string_vec: Vec<String>) -> bool {
 	for item in obj_type_string_vec {
 		let item_obj_type = ObjectType::from_str(&item).unwrap();

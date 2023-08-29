@@ -136,14 +136,10 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		return None
 	}
 	if let Some(obj) = res.data {
-		// let str_obj_type = serde_json::to_string(&obj_type).ok()?;
 		let whitelist_enabled = get_config_singleton().whitelist.clone().enabled;
 		let whitelist_packages = get_config_singleton().whitelist.clone().packages;
-		info!("Whitelist enabled is: {}", whitelist_enabled);
 		let obj_type = obj.object_type().ok()?;
-		info!("Outside whitelist conditional object type is: {}", &obj_type);
 		if whitelist_packages != None && whitelist_enabled == true && check_obj_type_from_string_vec(&obj_type, whitelist_packages.unwrap()) == true {
-			info!("Inside whitelist conditional type is: {}", &str_obj_type);
 			let mut bytes = Vec::with_capacity(4096);
 			let bson = bson::to_bson(&obj).unwrap();
 			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();

@@ -9,7 +9,6 @@ rustflags = "--cfg tokio_unstable"
 
 [dependencies]
 anyhow = "1.0"
-regex = "1.9.4"
 futures = "0.3"
 figment = { version = "0.10", features = ["yaml", "env"] }
 tracing = "0.1"
