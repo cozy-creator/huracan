@@ -40,6 +40,7 @@ use crate::{
 	utils::make_descending_ranges,
 };
 
+
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
 // endpoints we're using (try_multi_get_parsed_past_object, query_transaction_blocks)
 const SUI_QUERY_MAX_RESULT_LIMIT: usize = 1000;

@@ -1,5 +1,4 @@
 use std::time::Duration;
-
 use macros::with_client_rotation;
 use sui_sdk::{
 	apis::ReadApi,
@@ -14,9 +13,10 @@ use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 };
+use sui_types::base_types::ObjectType;
 use tokio::time::Instant;
-
-use crate::{_prelude::*, conf::RpcProviderConfig};
+use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_obj_type_from_string_vec};
+use crate::conf::get_config_singleton;
 
 #[derive(Clone)]
 pub struct ClientPool {
@@ -136,14 +136,25 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 		return None
 	}
 	if let Some(obj) = res.data {
-		// TODO: Filter objects here
-		let package_id = obj.content.unwrap();
-		info!("object type is {}", package_id);
-		// TODO perhaps we want to do some arena-based allocation for all of the objs in a batch together
-		let mut bytes = Vec::with_capacity(4096);
-		let bson = bson::to_bson(&obj).unwrap();
-		bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
-		return Some((obj.version, bytes))
+		let obj_type = obj.object_type().ok()?;
+		// Handle whitelist packages.
+		let whitelist_enabled = get_config_singleton().whitelist.clone().enabled;
+		let whitelist_packages = get_config_singleton().whitelist.clone().packages;
+		if whitelist_packages != None && whitelist_enabled == true && check_obj_type_from_string_vec(&obj_type, whitelist_packages.unwrap()) == true {
+			let mut bytes = Vec::with_capacity(4096);
+			let bson = bson::to_bson(&obj).unwrap();
+			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+			return Some((obj.version, bytes))
+		}
+		// Handle blacklist packages.
+		let blacklist_enabled = get_config_singleton().blacklist.clone().enabled;
+		let blacklist_packages = get_config_singleton().blacklist.clone().packages;
+		if blacklist_packages != None && blacklist_enabled == true && check_obj_type_from_string_vec(&obj_type, blacklist_packages.unwrap()) == false {
+			let mut bytes = Vec::with_capacity(4096);
+			let bson = bson::to_bson(&obj).unwrap();
+			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+			return Some((obj.version, bytes))
+		}
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
 	return None

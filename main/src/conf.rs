@@ -6,6 +6,7 @@ use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Database,
 };
+use tokio::sync::OnceCell;
 
 use crate::{_prelude::*, client::ClientPool};
 
@@ -128,6 +129,32 @@ pub struct SuiConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Whitelist{
+	pub enabled:  bool,
+	pub packages: Option<Vec<String>>,
+}
+
+impl Default for Whitelist {
+	fn default() -> Whitelist {
+		Whitelist { enabled: false, packages: None }
+	}
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Blacklist {
+	pub enabled:  bool,
+	pub packages: Option<Vec<String>>,
+}
+
+impl Default for Blacklist {
+	fn default() -> Blacklist {
+		Blacklist { enabled: false, packages: None }
+	}
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
 	pub env:                 String,
 	pub net:                 String,
@@ -143,6 +170,8 @@ pub struct AppConfig {
 	pub log:                 LogConfig,
 	pub backfillonly:	     bool,
 	pub backfillstartcheckpoint: Option<u64>,
+	pub whitelist:           Whitelist,
+	pub blacklist:           Blacklist,
 }
 
 impl AppConfig {
@@ -179,7 +208,19 @@ impl AppConfig {
 	}
 }
 
-// -- helpers
+// Singleton for config
+pub(crate) static APPCONFIG: OnceCell<AppConfig> = OnceCell::const_new();
+
+// Setup config singleton
+pub async fn setup_config_singleton(cfg: &AppConfig) -> &'static AppConfig {
+	APPCONFIG.get_or_init(|| async {
+		cfg.clone()
+	}).await
+}
+
+pub fn get_config_singleton() -> &'static AppConfig {
+	APPCONFIG.get().expect("ConfigError: config singleton not initialized")
+}
 
 #[derive(Clone, Debug)]
 pub struct CLevel(pub Level);
