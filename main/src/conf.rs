@@ -175,6 +175,7 @@ pub struct AppConfig {
 	pub pollintervalms:          u64,
 	pub mongo:                   MongoConfig,
 	pub pulsar:                  PulsarConfig,
+	pub influx:                  InfluxConfig,
 	pub sui:                     SuiConfig,
 	pub log:                     LogConfig,
 	pub backfillonly:            bool,
@@ -233,9 +234,10 @@ pub(crate) static INFLUXCLIENT: OnceCell<influxdb::Client> = OnceCell::const_new
 
 pub async fn setup_influx_singleton() -> &'static influxdb::Client {
 	INFLUXCLIENT.get_or_init(|| async {
-		let influxconfig = get_config_singleton().influx;
+		let influxconfig = get_config_singleton().influx.clone();
 		let client = Client::new(influxconfig.url, influxconfig.database);
 		client.with_token(influxconfig.token);
+		return client.clone();
 	}).await
 }
 
