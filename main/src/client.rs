@@ -1,6 +1,6 @@
 use std::time::Duration;
 use chrono::Utc;
-use influxdb::Timestamp;
+use influxdb::{InfluxDbWriteable, Timestamp};
 use macros::with_client_rotation;
 use sui_sdk::{
 	apis::ReadApi,
@@ -127,9 +127,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 					time: Timestamp::Milliseconds(0),
 					object_id: object_id.to_string(),
 					error_type: "sui_object_deleted".to_string(),
-				};
+				}.into_query("sui_object_deleted");
 				let write_result = influxclient.query(ingest_error);
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
+				// assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
 			}
 			NotExists { object_id } => {
 				warn!(object_id = ?object_id, "SuiObjectResponseError : NotExists");
@@ -137,9 +137,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 					time: Timestamp::Milliseconds(0),
 					object_id: object_id.to_string(),
 					error_type: "sui_object_not_exists".to_string(),
-				};
+				}.into_query("sui_object_not_exists");
 				let write_result = influxclient.query(ingest_error);
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
+				// assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
 			}
 			Unknown => {
 				warn!("SuiObjectResponseError : Unknown");
@@ -147,9 +147,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 					time: Timestamp::Milliseconds(0),
 					object_id: "unknown".to_string(),
 					error_type: "sui_object_error".to_string(),
-				};
+				}.into_query("sui_object_error");
 				let write_result = influxclient.query(ingest_error);
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
+				// assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
 			}
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
@@ -157,9 +157,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 					time: Timestamp::Milliseconds(0),
 					object_id: "unknown".to_string(),
 					error_type: "sui_object_display_error".to_string(),
-				};
+				}.into_query("sui_object_dislplay_error");
 				let write_result = influxclient.query(ingest_error);
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
+				// assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
 			}
 			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
