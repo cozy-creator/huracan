@@ -26,6 +26,8 @@ mod mongo;
 mod pulsar;
 mod utils;
 
+mod influx;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	dotenv().ok();
@@ -40,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
 	}
 
 	setup_config_singleton(&cfg).await;
+	setup_influx_singleton().await;
 
 	if cfg.backfillonly == true {
 		let start_checkpoint = cfg.backfillstartcheckpoint;
