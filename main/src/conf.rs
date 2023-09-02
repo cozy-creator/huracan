@@ -236,8 +236,8 @@ pub async fn setup_influx_singleton() -> &'static influxdb::Client {
 	INFLUXCLIENT.get_or_init(|| async {
 		let influxconfig = get_config_singleton().influx.clone();
 		let client = Client::new(influxconfig.url, influxconfig.database);
-		client.with_token(influxconfig.token);
-		return client.clone();
+		client.clone().with_token(influxconfig.token);
+		return client;
 	}).await
 }
 
