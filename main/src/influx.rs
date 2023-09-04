@@ -147,7 +147,7 @@ pub async fn write_metric_rpc_request(rpc_method: String) {
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = RPCRequest {
         time,
-        rpc_method: rpc_method,
+        rpc_method,
     }.into_query("rpc_request");
     let write_result = influx_client.query(influx_item).await;
     match write_result {

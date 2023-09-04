@@ -85,8 +85,8 @@ pulsar:
   topicbase: persistent://public/default/
 
 influx:
-  database: sui-mainet-prod
-  url: https://us-east-1-1.aws.cloud2.influxdata.com
+  database: sui
+  url: http://127.0.0.1:8086
   token: xxx
 
 # RPC credentials. Each network can take one or more entries to facilitate round-robin RPC invocations.
