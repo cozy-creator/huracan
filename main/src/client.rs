@@ -1,5 +1,4 @@
 use std::time::Duration;
-use influxdb::{InfluxDbWriteable, Timestamp};
 use macros::with_client_rotation;
 use sui_sdk::{
 	apis::ReadApi,
@@ -17,9 +16,9 @@ use sui_types::{
 use sui_types::error::SuiObjectResponseError::*;
 use tokio::time::Instant;
 use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_obj_type_from_string_vec};
-use crate::conf::{get_config_singleton, get_influx_singleton};
-use crate::influx::{IngestError, write_metric_ingest_error, write_metric_rpc_request};
-use crate::influx::get_influx_timestamp_as_milliseconds;
+use crate::conf::get_config_singleton;
+use crate::influx::{write_metric_ingest_error, get_influx_timestamp_as_milliseconds, write_metric_rpc_request};
+
 
 #[derive(Clone)]
 pub struct ClientPool {
@@ -58,7 +57,7 @@ impl ClientPool {
 
 	#[with_client_rotation]
 	pub async fn get_latest_checkpoint_sequence_number(&mut self) -> SuiRpcResult<CheckpointSequenceNumber> {
-		write_metric_rpc_request("get_latest_checkpoint_sequence_number").await;
+		influx::write_metric_rpc_request("get_latest_checkpoint_sequence_number").await;
 		get_latest_checkpoint_sequence_number().await
 	}
 
@@ -171,7 +170,7 @@ pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) ->
 		}
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
-	write_metric_ingest_error(&*id?.to_string(), &*"sui_object_no_data_and_no_error".to_string(),).await;
+	write_metric_ingest_error(&*id.to_string(), "sui_object_no_data_and_no_error").await;
 	return None
 }
 

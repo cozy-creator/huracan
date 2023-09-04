@@ -1147,24 +1147,14 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 			match sui.multi_get_object_with_options(obj_ids, query_opts.clone()).await {
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
-					let influx_client = get_influx_client_singleton();
-					let ts = get_influx_timestamp_as_milliseconds();
-					let rpc_error = IngestRPCError {
-						time: ts,
-						host:
-						error_type: "sui_object_deleted".to_string(),
-					}.into_query("sui_object_deleted");
-				let write_result = influxclient.query(ingest_error).await;
-				match write_result {
-					Ok(string) => debug!(string),
-					Err(error) => warn!("Could not write to influx: {}", error),
-				}
+					write_metric_rpc_error("multi_get_object_with_options").await;
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut item in chunk {
 						match sui.get_object_with_options(item.id, query_opts.clone()).await {
 							Err(err) => {
 								error!(object_id = ?item.id, error = format!("{err:?}"), "individual fetch also failed");
+								write_metric_rpc_error("get_object_with_options").await;
 								yield (StepStatus::Err, item);
 							},
 							Ok(res) => {
@@ -1183,7 +1173,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					// the sui endpoint is implemented such that the response items are in the same
 					// order as the input items, so we don't have to search or otherwise match them
 					if objs.len() != chunk.len() {
-						write_rpc_error("unexpected_payload".to_string()).await;
+						write_metric_rpc_error("unexpected_payload").await;
 						panic!("sui.multi_get_object_with_options() mismatch between input and result len!");
 					}
 					for (mut item, res) in zip(chunk, objs) {
