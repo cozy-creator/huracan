@@ -40,7 +40,15 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_mongo_write_error, write_metric_rpc_request};
+use crate::influx::{
+	get_influx_timestamp_as_milliseconds,
+	InsertObject,
+	MissingObject,
+	ModifiedObject,
+	write_metric_rpc_error,
+	write_metric_rpc_request,
+	write_metric_mongo_write_error
+};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -1271,7 +1279,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 				Ok(res) => {
 					// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
 					if res.get_i32("n").unwrap() != n as i32 {
-						write_mongo_write_error().await;
+						write_metric_mongo_write_error().await;
 						panic!(
 							"failed to execute at least one of the upserts: {:#?}",
 							res.get_array("writeErrors").unwrap()
@@ -1286,7 +1294,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
-					let missing = (n - (inserted + modified as usize));
+					let missing = n - (inserted + modified as usize);
 					let missing_info =
 						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
@@ -1317,7 +1325,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 				Err(err) => {
 					// the whole thing failed; retry a few times, then assume it's a bug
 					// Report to InfluxDB
-					write_mongo_write_error().await;
+					write_metric_mongo_write_error().await;
 					if retries_left == 0 {
 						panic!("final attempt to run mongo batch failed: {:?}", err);
 					}
