@@ -4,8 +4,8 @@ use std::{
 	io::Cursor,
 	sync::atomic::{AtomicU16, Ordering::Relaxed},
 	vec::IntoIter,
+	iter::zip,
 };
-
 use anyhow::Result;
 use async_channel::{Receiver as ACReceiver, Sender as ACSender};
 use async_stream::stream;
@@ -33,7 +33,7 @@ use tokio::{
 use crate::{
 	_prelude::*,
 	client,
-	client::ClientPool,
+	client::{ClientPool, parse_get_object_response},
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool, mongo,
 	mongo::{Checkpoint, mongo_checkpoint},
@@ -1286,7 +1286,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
-					let missing = (n - (inserted + modified as usize)).as_usize();
+					let missing = (n - (inserted + modified as usize));
 					let missing_info =
 						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
@@ -1296,7 +1296,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					let influx_items = vec!(
 						InsertObject {
 							time: ts.into(),
-							count: inserted.as_i32(),
+							count: inserted as i32,
 						}.into_query("inserted_object"),
 						ModifiedObject {
                             time: ts.into(),
@@ -1304,7 +1304,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
                         }.into_query("modified_object"),
 						MissingObject {
 							time: ts.into(),
-                            count: missing.as_i32(),
+                            count: missing as i32,
 						}.into_query("missing_object"),
 					);
 					let write_result = influx_client.query(influx_items).await;
