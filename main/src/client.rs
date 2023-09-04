@@ -1,5 +1,4 @@
 use std::time::Duration;
-use chrono::Utc;
 use influxdb::{InfluxDbWriteable, Timestamp};
 use macros::with_client_rotation;
 use sui_sdk::{
@@ -15,11 +14,12 @@ use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 };
-use sui_types::base_types::ObjectType;
+use sui_types::error::SuiObjectResponseError::*;
 use tokio::time::Instant;
 use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_obj_type_from_string_vec};
 use crate::conf::{get_config_singleton, get_influx_singleton};
-use crate::influx::IngestError;
+use crate::influx::{IngestError, write_metric_ingest_error, write_metric_rpc_request};
+use crate::influx::get_influx_timestamp_as_milliseconds;
 
 #[derive(Clone)]
 pub struct ClientPool {
@@ -58,6 +58,7 @@ impl ClientPool {
 
 	#[with_client_rotation]
 	pub async fn get_latest_checkpoint_sequence_number(&mut self) -> SuiRpcResult<CheckpointSequenceNumber> {
+		write_metric_rpc_request("get_latest_checkpoint_sequence_number").await;
 		get_latest_checkpoint_sequence_number().await
 	}
 
@@ -69,6 +70,7 @@ impl ClientPool {
 		limit: Option<usize>,
 		descending_order: bool,
 	) -> SuiRpcResult<TransactionBlocksPage> {
+		write_metric_rpc_request("query_transaction_blocks").await;
 		query_transaction_blocks(query.clone(), cursor, limit, descending_order).await
 	}
 
@@ -78,6 +80,7 @@ impl ClientPool {
 		object_id: ObjectID,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<SuiObjectResponse> {
+		write_metric_rpc_request("get_object_with_options").await;
 		get_object_with_options(object_id, options.clone()).await
 	}
 
@@ -87,6 +90,7 @@ impl ClientPool {
 		object_ids: Vec<ObjectID>,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<Vec<SuiObjectResponse>> {
+		write_metric_rpc_request("multi_get_object_with_options").await;
 		multi_get_object_with_options(object_ids.clone(), options.clone()).await
 	}
 
@@ -97,6 +101,7 @@ impl ClientPool {
 		version: SequenceNumber,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<SuiPastObjectResponse> {
+		write_metric_rpc_request("try_get_parsed_past_object").await;
 		try_get_parsed_past_object(object_id, version, options.clone()).await
 	}
 
@@ -106,6 +111,7 @@ impl ClientPool {
 		past_objects: Vec<SuiGetPastObjectRequest>,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<Vec<SuiPastObjectResponse>> {
+		write_metric_rpc_request("try_multi_get_parsed_past_object").await;
 		try_multi_get_parsed_past_object(past_objects.clone(), options.clone()).await
 	}
 
@@ -117,59 +123,28 @@ impl ClientPool {
 }
 
 pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
-	let influxclient = get_influx_singleton();
 	if let Some(err) = res.error {
-		use sui_types::error::SuiObjectResponseError::*;
+		let ts = get_influx_timestamp_as_milliseconds().await;
 		match err {
 			Deleted { object_id, version, digest: _ } => {
 				warn!(object_id = ?object_id, version = ?version, "SuiObjectResponseError : Deleted");
-				let ingest_error = IngestError {
-					time: Timestamp::Milliseconds(0),
-					object_id: object_id.to_string(),
-					error_type: "sui_object_deleted".to_string(),
-				}.into_query("sui_object_deleted");
-				let write_result = influxclient.query(ingest_error).await;
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.")
+				write_metric_ingest_error(&*object_id.to_string(), &*"sui_object_deleted".to_string(),).await;
 			}
 			NotExists { object_id } => {
 				warn!(object_id = ?object_id, "SuiObjectResponseError : NotExists");
-				let ingest_error = IngestError {
-					time: Timestamp::Milliseconds(0),
-					object_id: object_id.to_string(),
-					error_type: "sui_object_not_exists".to_string(),
-				}.into_query("sui_object_not_exists");
-				let write_result = influxclient.query(ingest_error).await;
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.");
+				write_metric_ingest_error(&*object_id.to_string(), &*"sui_object_not_exists".to_string(),).await;
 			}
 			Unknown => {
 				warn!("SuiObjectResponseError : Unknown");
-				let ingest_error = IngestError {
-					time: Timestamp::Milliseconds(0),
-					object_id: "unknown".to_string(),
-					error_type: "sui_object_error".to_string(),
-				}.into_query("sui_object_error");
-				let write_result = influxclient.query(ingest_error).await;
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.");
+				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_unknown".to_string(),).await;
 			}
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
-				let ingest_error = IngestError {
-					time: Timestamp::Milliseconds(0),
-					object_id: "unknown".to_string(),
-					error_type: "sui_object_display_error".to_string(),
-				}.into_query("sui_object_display_error");
-				let write_result = influxclient.query(ingest_error).await;
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.");
+				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_display_error".to_string(),).await;
 			}
 			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
-				let ingest_error = IngestError {
-					time: Timestamp::Milliseconds(0),
-					object_id: parent_object_id.to_string(),
-					error_type: "sui_object_dynamic_field_error".to_string(),
-				}.into_query("sui_object_dynamic_field_error");
-				let write_result = influxclient.query(ingest_error).await;
-				assert!(write_result.is_ok(), "InfluxError: Failed to write metric data.");
+				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_dynamic_field_not_found".to_string(),).await;
 			}
 		};
 		return None
@@ -196,6 +171,7 @@ pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) ->
 		}
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
+	write_metric_ingest_error(&*id?.to_string(), &*"sui_object_no_data_and_no_error".to_string(),).await;
 	return None
 }
 

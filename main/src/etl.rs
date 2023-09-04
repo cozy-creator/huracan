@@ -2,7 +2,6 @@ use std::{
 	collections::{btree_map::OccupiedError, BTreeMap},
 	fmt::{Display, Formatter},
 	io::Cursor,
-	iter::zip,
 	sync::atomic::{AtomicU16, Ordering::Relaxed},
 	vec::IntoIter,
 };
@@ -14,7 +13,8 @@ use bson::{doc, Document};
 use chrono::Utc;
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
-use mongodb::{options::FindOneOptions, Database};
+use influxdb::InfluxDbWriteable;
+use mongodb::{Database, options::FindOneOptions};
 use pulsar::{Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::rpc_types::{
@@ -33,12 +33,14 @@ use tokio::{
 use crate::{
 	_prelude::*,
 	client,
-	client::{parse_get_object_response, ClientPool},
+	client::ClientPool,
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool, mongo,
-	mongo::{mongo_checkpoint, Checkpoint},
-	utils::make_descending_ranges,
+	mongo::{Checkpoint, mongo_checkpoint},
+	utils::make_descending_ranges
 };
+use crate::conf::get_influx_singleton;
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_mongo_write_error, write_metric_rpc_request};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -591,7 +593,6 @@ async fn spawn_backfill_pipeline(
 		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
 	};
 	info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
-
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
 
@@ -1060,6 +1061,7 @@ async fn do_poll(
 			Utc::now().timestamp_millis() as u64 + last_poll.elapsed().as_millis().div_ceil(2) as u64;
 		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
 			Ok(mut page) => {
+				write_metric_rpc_request(&*"query_transaction_blocks".to_string()).await;
 				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
 				last_poll = call_start;
 				retry_count = 0;
@@ -1145,6 +1147,18 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 			match sui.multi_get_object_with_options(obj_ids, query_opts.clone()).await {
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
+					let influx_client = get_influx_client_singleton();
+					let ts = get_influx_timestamp_as_milliseconds();
+					let rpc_error = IngestRPCError {
+						time: ts,
+						host:
+						error_type: "sui_object_deleted".to_string(),
+					}.into_query("sui_object_deleted");
+				let write_result = influxclient.query(ingest_error).await;
+				match write_result {
+					Ok(string) => debug!(string),
+					Err(error) => warn!("Could not write to influx: {}", error),
+				}
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut item in chunk {
@@ -1169,6 +1183,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					// the sui endpoint is implemented such that the response items are in the same
 					// order as the input items, so we don't have to search or otherwise match them
 					if objs.len() != chunk.len() {
+						write_rpc_error("unexpected_payload".to_string()).await;
 						panic!("sui.multi_get_object_with_options() mismatch between input and result len!");
 					}
 					for (mut item, res) in zip(chunk, objs) {
@@ -1195,6 +1210,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 ) {
 	// e.g. prod_testnet_objects
 	let collection = mongo::mongo_collection_name(&cfg, "");
+	let influx_client = get_influx_singleton();
 
 	pin!(stream);
 	while let Some(chunk) = stream.next().await {
@@ -1265,6 +1281,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 				Ok(res) => {
 					// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
 					if res.get_i32("n").unwrap() != n as i32 {
+						write_mongo_write_error().await;
 						panic!(
 							"failed to execute at least one of the upserts: {:#?}",
 							res.get_array("writeErrors").unwrap()
@@ -1279,15 +1296,38 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
-					let missing = n - (inserted + modified as usize);
+					let missing = (n - (inserted + modified as usize)).as_usize();
 					let missing_info =
 						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
 
-					break
+					// We track the number of MongoDB operations in InfluxDB.
+					let ts = get_influx_timestamp_as_milliseconds();
+					let influx_items = vec!(
+						InsertObject {
+							time: ts.into(),
+							count: inserted.as_i32(),
+						}.into_query("inserted_object"),
+						ModifiedObject {
+                            time: ts.into(),
+                            count: modified,
+                        }.into_query("modified_object"),
+						MissingObject {
+							time: ts.into(),
+                            count: missing.as_i32(),
+						}.into_query("missing_object"),
+					);
+					let write_result = influx_client.query(influx_items).await;
+					match write_result {
+						Ok(string) => debug!(string),
+						Err(error) => warn!("Could not write to influx: {}", error),
+					}
+					break;
 				}
 				Err(err) => {
 					// the whole thing failed; retry a few times, then assume it's a bug
+					// Report to InfluxDB
+					write_mongo_write_error().await;
 					if retries_left == 0 {
 						panic!("final attempt to run mongo batch failed: {:?}", err);
 					}
