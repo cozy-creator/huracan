@@ -43,8 +43,8 @@ pub async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Databas
 			.await
 		{
 			warn!("failed saving checkpoint to mongo: {:?}", err);
-			write_metric_mongo_write_error();
-			write_metric_checkpoint_error(cp.to_string());
+			write_metric_mongo_write_error().await;
+			write_metric_checkpoint_error(cp.to_string()).await;
 			if retries_left > 0 {
 				retries_left -= 1;
 				continue
@@ -52,7 +52,7 @@ pub async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Databas
 			error!(error = ?err, "checkpoint {} fully completed, but could not save checkpoint status to mongo!", cp);
 		}
 		// At this point, we have successfully saved the checkpoint to MongoDB.
-		write_metric_create_checkpoint(cp.to_string());
+		write_metric_create_checkpoint(cp.to_string()).await;
 		break
 	}
 }
