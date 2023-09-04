@@ -1069,7 +1069,7 @@ async fn do_poll(
 			Utc::now().timestamp_millis() as u64 + last_poll.elapsed().as_millis().div_ceil(2) as u64;
 		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
 			Ok(mut page) => {
-				write_metric_rpc_request("query_transaction_blocks").await;
+				write_metric_rpc_request("query_transaction_blocks".to_string()).await;
 				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
 				last_poll = call_start;
 				retry_count = 0;
@@ -1155,14 +1155,14 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 			match sui.multi_get_object_with_options(obj_ids, query_opts.clone()).await {
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
-					write_metric_rpc_error("multi_get_object_with_options").await;
+					write_metric_rpc_error("multi_get_object_with_options".to_string()).await;
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut item in chunk {
 						match sui.get_object_with_options(item.id, query_opts.clone()).await {
 							Err(err) => {
 								error!(object_id = ?item.id, error = format!("{err:?}"), "individual fetch also failed");
-								write_metric_rpc_error("get_object_with_options").await;
+								write_metric_rpc_error("get_object_with_options".to_string()).await;
 								yield (StepStatus::Err, item);
 							},
 							Ok(res) => {
@@ -1181,7 +1181,7 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					// the sui endpoint is implemented such that the response items are in the same
 					// order as the input items, so we don't have to search or otherwise match them
 					if objs.len() != chunk.len() {
-						write_metric_rpc_error("unexpected_payload").await;
+						write_metric_rpc_error("unexpected_payload".to_string()).await;
 						panic!("sui.multi_get_object_with_options() mismatch between input and result len!");
 					}
 					for (mut item, res) in zip(chunk, objs) {

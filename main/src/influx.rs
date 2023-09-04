@@ -97,13 +97,13 @@ pub struct IngestError {
     #[influxdb(tag)] pub(crate) error_type: String,
 }
 
-pub async fn write_metric_ingest_error(object_id: &str, error_type: &str) {
+pub async fn write_metric_ingest_error(object_id: String, error_type: String) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = IngestError {
         time,
-        object_id: object_id.to_string(),
-        error_type: error_type.to_string(),
+        object_id,
+        error_type,
     }.into_query("ingest_error");
     let write_result = influx_client.query(influx_item).await;
     match write_result {
@@ -120,12 +120,12 @@ pub struct RPCError {
     #[influxdb(tag)] pub(crate) rpc_method: String,
 }
 
-pub async fn write_metric_rpc_error(rpc_method: &str) {
+pub async fn write_metric_rpc_error(rpc_method: String) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = RPCError {
         time,
-        rpc_method: rpc_method.to_string(),
+        rpc_method,
     }.into_query("rpc_error");
     let write_result = influx_client.query(influx_item).await;
     match write_result {
@@ -142,12 +142,12 @@ pub struct RPCRequest {
 }
 
 
-pub async fn write_metric_rpc_request(rpc_method: &str) {
+pub async fn write_metric_rpc_request(rpc_method: String) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = RPCRequest {
         time,
-        rpc_method: rpc_method.to_string(),
+        rpc_method: rpc_method,
     }.into_query("rpc_request");
     let write_result = influx_client.query(influx_item).await;
     match write_result {

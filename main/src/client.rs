@@ -120,23 +120,23 @@ pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) ->
 		match err {
 			Deleted { object_id, version, digest: _ } => {
 				warn!(object_id = ?object_id, version = ?version, "SuiObjectResponseError : Deleted");
-				write_metric_ingest_error(&*object_id.to_string(), &*"sui_object_deleted".to_string(),).await;
+				write_metric_ingest_error(object_id.to_string(), "sui_object_deleted".to_string()).await;
 			}
 			NotExists { object_id } => {
 				warn!(object_id = ?object_id, "SuiObjectResponseError : NotExists");
-				write_metric_ingest_error(&*object_id.to_string(), &*"sui_object_not_exists".to_string(),).await;
+				write_metric_ingest_error(object_id.to_string(), "sui_object_not_exists".to_string()).await;
 			}
 			Unknown => {
 				warn!("SuiObjectResponseError : Unknown");
-				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_unknown".to_string(),).await;
+				write_metric_ingest_error("unknown".to_string(), "sui_object_unknown".to_string()).await;
 			}
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
-				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_display_error".to_string(),).await;
+				write_metric_ingest_error("unknown".to_string(), "sui_object_display_error".to_string()).await;
 			}
 			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
-				write_metric_ingest_error(&*"unknown".to_string(), &*"sui_object_dynamic_field_not_found".to_string(),).await;
+				write_metric_ingest_error("unknown".to_string(), "sui_object_dynamic_field_not_found".to_string()).await;
 			}
 		};
 		return None
@@ -163,7 +163,7 @@ pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) ->
 		}
 	}
 	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
-	write_metric_ingest_error(&*id.to_string(), "sui_object_no_data_and_no_error").await;
+	write_metric_ingest_error(id.to_string(), "sui_object_no_data_and_no_error".to_string()).await;
 	return None
 }
 
