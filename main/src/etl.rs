@@ -1292,18 +1292,18 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
 
 					// We track the number of MongoDB operations in InfluxDB.
-					let ts = get_influx_timestamp_as_milliseconds();
+					let ts = get_influx_timestamp_as_milliseconds().await;
 					let influx_items = vec!(
 						InsertObject {
-							time: ts.into(),
+							time: ts,
 							count: inserted as i32,
 						}.into_query("inserted_object"),
 						ModifiedObject {
-                            time: ts.into(),
+                            time: ts,
                             count: modified,
                         }.into_query("modified_object"),
 						MissingObject {
-							time: ts.into(),
+							time: ts,
                             count: missing as i32,
 						}.into_query("missing_object"),
 					);

@@ -33,12 +33,12 @@ pub struct MongoWriteError {
     pub(crate) time: Timestamp,
 }
 
-pub async fn write_mongo_write_error() {
+pub async fn write_metric_mongo_write_error() {
     let influx_client = get_influx_singleton();
-    let time = get_influx_timestamp_as_milliseconds();
+    let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = MongoWriteError {
         time,
-    };
+    }.into_query("mongo_write_error",);
     let write_result = influx_client.query(influx_item).await;
     match write_result {
         Ok(string) => debug!(string),
@@ -53,11 +53,39 @@ pub struct CreateCheckpoint {
     pub(crate) checkpoint_id: String,
 }
 
+pub async fn write_metric_create_checkpoint(checkpoint_id: String) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = CreateCheckpoint {
+        time,
+        checkpoint_id,
+    }.into_query("create_checkpoint",);
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
 // Hit an error writing checkpoint data.
 #[derive(InfluxDbWriteable)]
 pub struct CheckpointError {
     pub(crate) time: Timestamp,
     pub(crate) checkpoint_id: String,
+}
+
+pub async fn write_metric_checkpoint_error(checkpoint_id: String) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = CheckpointError {
+        time,
+        checkpoint_id: checkpoint_id.to_string(),
+    }.into_query("checkpoint_error",);
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
 }
 
 // Hit some kind of error during ingest.

@@ -57,7 +57,6 @@ impl ClientPool {
 
 	#[with_client_rotation]
 	pub async fn get_latest_checkpoint_sequence_number(&mut self) -> SuiRpcResult<CheckpointSequenceNumber> {
-		influx::write_metric_rpc_request("get_latest_checkpoint_sequence_number").await;
 		get_latest_checkpoint_sequence_number().await
 	}
 
@@ -69,7 +68,6 @@ impl ClientPool {
 		limit: Option<usize>,
 		descending_order: bool,
 	) -> SuiRpcResult<TransactionBlocksPage> {
-		write_metric_rpc_request("query_transaction_blocks").await;
 		query_transaction_blocks(query.clone(), cursor, limit, descending_order).await
 	}
 
@@ -79,7 +77,6 @@ impl ClientPool {
 		object_id: ObjectID,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<SuiObjectResponse> {
-		write_metric_rpc_request("get_object_with_options").await;
 		get_object_with_options(object_id, options.clone()).await
 	}
 
@@ -89,7 +86,6 @@ impl ClientPool {
 		object_ids: Vec<ObjectID>,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<Vec<SuiObjectResponse>> {
-		write_metric_rpc_request("multi_get_object_with_options").await;
 		multi_get_object_with_options(object_ids.clone(), options.clone()).await
 	}
 
@@ -100,7 +96,6 @@ impl ClientPool {
 		version: SequenceNumber,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<SuiPastObjectResponse> {
-		write_metric_rpc_request("try_get_parsed_past_object").await;
 		try_get_parsed_past_object(object_id, version, options.clone()).await
 	}
 
@@ -110,7 +105,6 @@ impl ClientPool {
 		past_objects: Vec<SuiGetPastObjectRequest>,
 		options: SuiObjectDataOptions,
 	) -> SuiRpcResult<Vec<SuiPastObjectResponse>> {
-		write_metric_rpc_request("try_multi_get_parsed_past_object").await;
 		try_multi_get_parsed_past_object(past_objects.clone(), options.clone()).await
 	}
 
@@ -123,7 +117,6 @@ impl ClientPool {
 
 pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
 	if let Some(err) = res.error {
-		let ts = get_influx_timestamp_as_milliseconds().await;
 		match err {
 			Deleted { object_id, version, digest: _ } => {
 				warn!(object_id = ?object_id, version = ?version, "SuiObjectResponseError : Deleted");
