@@ -1069,7 +1069,7 @@ async fn do_poll(
 			Utc::now().timestamp_millis() as u64 + last_poll.elapsed().as_millis().div_ceil(2) as u64;
 		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
 			Ok(mut page) => {
-				write_metric_rpc_request(&*"query_transaction_blocks".to_string()).await;
+				write_metric_rpc_request("query_transaction_blocks").await;
 				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
 				last_poll = call_start;
 				retry_count = 0;
