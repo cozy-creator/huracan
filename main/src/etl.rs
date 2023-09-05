@@ -40,7 +40,7 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint};
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -919,6 +919,7 @@ async fn do_scan(
 					// if we're in range and start is 1 or 0, we're entirely done,
 					// as that means that all remaining checkpoints are already complete
 					if *start <= 1 {
+						write_metric_final_checkpoint(cp).await;
 						break 'cp
 					}
 					// match! advance by whatever number of steps we need to end this iteration
@@ -936,6 +937,7 @@ async fn do_scan(
 				break
 			}
 		}
+		write_metric_current_checkpoint(cp).await;
 		// start fetching all tx blocks for this checkpoint
 		let q = SuiTransactionBlockResponseQuery::new(
 			Some(TransactionFilter::Checkpoint(cp as CheckpointSequenceNumber)),

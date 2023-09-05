@@ -195,6 +195,28 @@ pub async fn write_metric_current_checkpoint(checkpoint_id: u64) {
     }
 }
 
+// This is the final checkpoint handled by do_scan() and indexing will stop when this is published.
+#[derive(InfluxDbWriteable)]
+pub struct FinalCheckpoint {
+    pub(crate) time: Timestamp,
+    pub(crate) checkpoint_id: u64,
+}
+
+pub async fn write_metric_final_checkpoint(checkpoint_id: u64) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = FinalCheckpoint {
+        time,
+        checkpoint_id,
+    }.into_query("final_checkpoint");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
+
 #[derive(InfluxDbWriteable)]
 pub struct BackfillInit {
     pub(crate) time: Timestamp,
