@@ -40,7 +40,7 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint};
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint, write_metric_pause_livescan, write_metric_start_livescan, UnchangedObject};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -170,7 +170,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				};
 				break cp
 			};
-			write_metric_create_checkpoint(start_cp_for_offset).await;
+			write_metric_current_checkpoint(start_cp_for_offset).await;
 			// run first livescan from last known completed checkpoint
 			let mut last_livescan_cp = coll
 				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
@@ -219,6 +219,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
+						write_metric_pause_livescan(behind_cp).await;
 						pause_livescan.store(250, Relaxed);
 						warn!("IngestWarning: Pausing livescan pipeline.");
 					}
@@ -235,6 +236,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						async move {
 							checkpointcompleted_rx.await.ok();
 							pause.store(0, Relaxed);
+							warn!("IngestWarning: Resuming livescan pipeline.");
 						}
 					});
 					// TODO I think instead of waiting for the backfill to finish we just want to get
@@ -425,6 +427,7 @@ async fn spawn_livescan(
 	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.livescan.queuebuffers.cpcompletions);
 	let step_size = num_checkpoint_workers;
 	for partition in 0..num_checkpoint_workers {
+		write_metric_start_livescan().await;
 		tokio::spawn(do_scan(
 			cfg.livescan.clone(),
 			IngestRoute::Livescan,
@@ -1295,9 +1298,9 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
-					let missing = n - (inserted + modified as usize);
+					let unchanged = n - (inserted + modified as usize);
 					let missing_info =
-						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
+						if unchanged > 0 { format!(" // {} items without effect!", unchanged) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
 
 					// We track the number of MongoDB operations in InfluxDB.
@@ -1311,9 +1314,9 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
                             time: ts,
                             count: modified,
                         }.into_query("modified_object"),
-						MissingObject {
+						UnchangedObject {
 							time: ts,
-                            count: missing as i32,
+                            count: unchanged as i32,
 						}.into_query("missing_object"),
 					);
 					let write_result = influx_client.query(influx_items).await;

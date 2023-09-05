@@ -7,6 +7,7 @@ use crate::conf::get_influx_singleton;
 // https://docs.influxdata.com/influxdb/v2.7/write-data/best-practices/schema-design/#use-tags-and-fields
 
 // Created new object in MongoDB.
+// See: https://www.mongodb.com/docs/manual/reference/method/WriteResult/#mongodb-data-WriteResult.nUpserted
 #[derive(InfluxDbWriteable)]
 pub struct InsertObject {
     pub(crate) time: Timestamp,
@@ -14,15 +15,20 @@ pub struct InsertObject {
 }
 
 // Modified or deleted an object in MongoDB.
+// See: https://www.mongodb.com/docs/manual/reference/method/WriteResult/#mongodb-data-WriteResult.nModified
 #[derive(InfluxDbWriteable)]
 pub struct ModifiedObject {
     pub(crate) time: Timestamp,
     pub(crate) count: i32,
 }
 
-// Attempted to update an object to MongoDB, but it wasn't found.
+// Attempted to update an object to MongoDB, but the item was identical.
+// See: https://www.mongodb.com/docs/manual/reference/method/WriteResult/#mongodb-data-WriteResult.nMatched
+// This is calculated in our code as Matched - Upserted - Modified.
+// This is actually pretty common on Sui, since a transaction block may contain several objects,
+// and not all are modified in a given transaction.
 #[derive(InfluxDbWriteable)]
-pub struct MissingObject {
+pub struct UnchangedObject {
     pub(crate) time: Timestamp,
     pub(crate) count: i32,
 }
@@ -237,6 +243,43 @@ pub async fn write_metric_backfill_init(start_checkpoint: u64) {
     }
 }
 
+#[derive(InfluxDbWriteable)]
+pub struct PauseLivescan{
+    pub(crate) time: Timestamp,
+    pub(crate) behind_by: u64,
+}
+
+pub async fn write_metric_pause_livescan(behind_by: u64) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = PauseLivescan {
+        time,
+        behind_by,
+    }.into_query("pause_livescan");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
+#[derive(InfluxDbWriteable)]
+pub struct StartLivescan{
+    pub(crate) time: Timestamp,
+}
+
+pub async fn write_metric_start_livescan() {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = StartLivescan {
+        time,
+    }.into_query("start_livescan");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
 
 pub(crate) async fn get_influx_timestamp_as_milliseconds() -> Timestamp {
 	let start = SystemTime::now();
