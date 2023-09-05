@@ -40,15 +40,7 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{
-	get_influx_timestamp_as_milliseconds,
-	InsertObject,
-	MissingObject,
-	ModifiedObject,
-	write_metric_rpc_error,
-	write_metric_rpc_request,
-	write_metric_mongo_write_error
-};
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -217,8 +209,10 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
+				write_metric_current_checkpoint(last_completed_cp.unwrap_or(0)).await;
 				let behind_cp = latest_cp - last_completed_cp.unwrap_or(0) as u64;
 				info!("ExtractionInfo: Currently behind by {} checkpoints.", behind_cp);
+				write_metric_checkpoints_behind(behind_cp).await;
 				if behind_cp > cfg.backfillthreshold as u64 {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
@@ -584,6 +578,7 @@ async fn spawn_backfill_pipeline(
 	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	info!("ExtractionInfo: Spawning backfill pipeline.");
+	write_metric_backfill_init(start_checkpoint.unwrap_or(0)).await;
 	let db = {
 		// give each pipeline its own rocksdb instance
 		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);

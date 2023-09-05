@@ -50,10 +50,10 @@ pub async fn write_metric_mongo_write_error() {
 #[derive(InfluxDbWriteable)]
 pub struct CreateCheckpoint {
     pub(crate) time: Timestamp,
-    pub(crate) checkpoint_id: String,
+    pub(crate) checkpoint_id: u64
 }
 
-pub async fn write_metric_create_checkpoint(checkpoint_id: String) {
+pub async fn write_metric_create_checkpoint(checkpoint_id: u64) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = CreateCheckpoint {
@@ -71,15 +71,15 @@ pub async fn write_metric_create_checkpoint(checkpoint_id: String) {
 #[derive(InfluxDbWriteable)]
 pub struct CheckpointError {
     pub(crate) time: Timestamp,
-    pub(crate) checkpoint_id: String,
+    pub(crate) checkpoint_id: u64,
 }
 
-pub async fn write_metric_checkpoint_error(checkpoint_id: String) {
+pub async fn write_metric_checkpoint_error(checkpoint_id: u64) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
     let influx_item = CheckpointError {
         time,
-        checkpoint_id: checkpoint_id.to_string(),
+        checkpoint_id,
     }.into_query("checkpoint_error",);
     let write_result = influx_client.query(influx_item).await;
     match write_result {
@@ -141,7 +141,6 @@ pub struct RPCRequest {
     #[influxdb(tag)] pub(crate) rpc_method: String,
 }
 
-
 pub async fn write_metric_rpc_request(rpc_method: String) {
     let influx_client = get_influx_singleton();
     let time = get_influx_timestamp_as_milliseconds().await;
@@ -155,6 +154,67 @@ pub async fn write_metric_rpc_request(rpc_method: String) {
         Err(error) => warn!("Could not write to influx: {}", error),
     }
 }
+
+#[derive(InfluxDbWriteable)]
+pub struct CheckpointsBehind {
+    pub(crate) time: Timestamp,
+    pub(crate) behind_by: u64,
+}
+
+pub async fn write_metric_checkpoints_behind(behind_by: u64) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = CheckpointsBehind {
+        time,
+        behind_by,
+    }.into_query("checkpoints_behind");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
+#[derive(InfluxDbWriteable)]
+pub struct CurrentCheckpoint {
+    pub(crate) time: Timestamp,
+    pub(crate) checkpoint_id: u64,
+}
+
+pub async fn write_metric_current_checkpoint(checkpoint_id: u64) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = CurrentCheckpoint {
+        time,
+        checkpoint_id,
+    }.into_query("current_checkpoint");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
+#[derive(InfluxDbWriteable)]
+pub struct BackfillInit {
+    pub(crate) time: Timestamp,
+    pub(crate) start_checkpoint: u64,
+}
+
+pub async fn write_metric_backfill_init(start_checkpoint: u64) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = BackfillInit {
+        time,
+        start_checkpoint,
+    }.into_query("backfill_init");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
 
 pub(crate) async fn get_influx_timestamp_as_milliseconds() -> Timestamp {
 	let start = SystemTime::now();
