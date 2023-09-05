@@ -119,7 +119,7 @@ blacklist:
 # Package IDs to include in indexing. You can copy/paste this from the Sui explorer or program logs.
 # Leaving this and the blacklist disabled will index everything.
 whitelist:
-  enabled: true
+  enabled: false
   packages:
 #   Example:
 #    - 0x2::coin::Coin<0x2::sui::SUI>
