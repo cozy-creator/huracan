@@ -40,7 +40,7 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint};
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -170,6 +170,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				};
 				break cp
 			};
+			write_metric_create_checkpoint(start_cp_for_offset).await;
 			// run first livescan from last known completed checkpoint
 			let mut last_livescan_cp = coll
 				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
@@ -198,6 +199,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						continue
 					}
 				};
+				write_metric_current_checkpoint(latest_cp).await;
 				last_poll = Instant::now();
 
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
@@ -346,6 +348,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					// - count items for current checkpoint
 					// - submit previous checkpoint count if we've just changed checkpoints
 					let cp = item.cp as u64;
+					write_metric_current_checkpoint(cp).await;
 					if cur_cp != cp {
 						info!("ExtractionInfo: Current unprocessed items in checkpoint: {}", cur_cp);
 						if cur_cp != 0 {
@@ -595,6 +598,7 @@ async fn spawn_backfill_pipeline(
 	} else {
 		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
 	};
+	write_metric_current_checkpoint(checkpoint_max).await;
 	info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
