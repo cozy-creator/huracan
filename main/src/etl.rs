@@ -543,7 +543,7 @@ async fn spawn_pipeline_tail(
 								};
 								info!("[{}] {}ms // {}ms", source, latency, completed - ts_sui);
 								last_latency = latency;
-								write_metric_extraction_latency(source, latency).await;
+								write_metric_extraction_latency(source.to_string(), latency.try_into().unwrap()).await;
 							}
 						}
 						let cp = item.cp;
