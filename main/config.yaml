@@ -19,6 +19,9 @@ pollintervalms: 100
 # Toggle backfill-only mode.
 backfillonly: false
 
+# Toggle livescan-only mode.
+livescanonly: false
+
 # Start the backfill from this checkpoint and work backward in time. Loaded into app as u64. Ignored if backfillonly is false.
 backfillstartcheckpoint: 1
 
