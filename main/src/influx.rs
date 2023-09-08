@@ -281,6 +281,28 @@ pub async fn write_metric_start_livescan() {
     }
 }
 
+#[derive(InfluxDbWriteable)]
+pub struct ExtractionLatency {
+    pub(crate) time: Timestamp,
+    #[influxdb(tag)]  pub (crate) source: String,
+    pub(crate) latency_ms: i32,
+}
+
+pub async fn write_metric_extraction_latency(source: String, latency_ms: i32) {
+    let influx_client = get_influx_singleton();
+    let time = get_influx_timestamp_as_milliseconds().await;
+    let influx_item = ExtractionLatency {
+        time,
+        latency_ms,
+        source,
+    }.into_query("extraction_latency");
+    let write_result = influx_client.query(influx_item).await;
+    match write_result {
+        Ok(string) => debug!(string),
+        Err(error) => warn!("Could not write to influx: {}", error),
+    }
+}
+
 pub(crate) async fn get_influx_timestamp_as_milliseconds() -> Timestamp {
 	let start = SystemTime::now();
 	let since_the_epoch = start

@@ -40,7 +40,7 @@ use crate::{
 	utils::make_descending_ranges
 };
 use crate::conf::get_influx_singleton;
-use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, MissingObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint, write_metric_pause_livescan, write_metric_start_livescan, UnchangedObject};
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint, write_metric_pause_livescan, write_metric_start_livescan, UnchangedObject, write_metric_extraction_latency};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -543,6 +543,7 @@ async fn spawn_pipeline_tail(
 								};
 								info!("[{}] {}ms // {}ms", source, latency, completed - ts_sui);
 								last_latency = latency;
+								write_metric_extraction_latency(source, latency).await;
 							}
 						}
 						let cp = item.cp;
