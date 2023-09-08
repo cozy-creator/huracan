@@ -169,7 +169,7 @@ pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) ->
 			return Some((obj.version, bytes))
 		}
 	}
-	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response! {}", res.);
+	info!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response! {}");
 	write_metric_ingest_error(id.to_string(), "sui_object_no_data_and_no_error".to_string()).await;
 	return None
 }
