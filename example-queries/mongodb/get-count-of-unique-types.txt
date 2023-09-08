@@ -1,0 +1,5 @@
+db.getSiblingDB("sui").getCollection("prod_mainnet_objects")
+.aggregate([
+    { $group: { _id: "$object.type" } },
+    { $sortByCount: "$object.type" }
+])
