@@ -8,6 +8,7 @@ edition = "2021"
 rustflags = "--cfg tokio_unstable"
 
 [dependencies]
+influxdb = { version = "0.7.0", features = ["derive"] }
 anyhow = "1.0"
 futures = "0.3"
 figment = { version = "0.10", features = ["yaml", "env"] }

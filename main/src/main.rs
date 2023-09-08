@@ -16,7 +16,7 @@ use _prelude::*;
 use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
-use crate::conf::setup_config_singleton;
+use crate::conf::{setup_config_singleton, setup_influx_singleton};
 
 mod _prelude;
 mod client;
@@ -25,6 +25,8 @@ mod etl;
 mod mongo;
 mod pulsar;
 mod utils;
+
+mod influx;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
 	}
 
 	setup_config_singleton(&cfg).await;
+	setup_influx_singleton().await;
 
 	if cfg.backfillonly == true {
 		let start_checkpoint = cfg.backfillstartcheckpoint;

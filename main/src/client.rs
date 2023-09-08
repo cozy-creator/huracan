@@ -13,10 +13,12 @@ use sui_types::{
 	base_types::{ObjectID, SequenceNumber, TransactionDigest, VersionNumber},
 	messages_checkpoint::CheckpointSequenceNumber,
 };
-use sui_types::base_types::ObjectType;
+use sui_types::error::SuiObjectResponseError::*;
 use tokio::time::Instant;
 use crate::{_prelude::*, conf::RpcProviderConfig, utils::check_obj_type_from_string_vec};
 use crate::conf::get_config_singleton;
+use crate::influx::{write_metric_ingest_error, get_influx_timestamp_as_milliseconds, write_metric_rpc_request};
+
 
 #[derive(Clone)]
 pub struct ClientPool {
@@ -113,42 +115,53 @@ impl ClientPool {
 	}
 }
 
-pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
+pub async fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Option<(VersionNumber, Vec<u8>)> {
 	if let Some(err) = res.error {
-		use sui_types::error::SuiObjectResponseError::*;
 		match err {
 			Deleted { object_id, version, digest: _ } => {
 				warn!(object_id = ?object_id, version = ?version, "SuiObjectResponseError : Deleted");
+				write_metric_ingest_error(object_id.to_string(), "sui_object_deleted".to_string()).await;
 			}
 			NotExists { object_id } => {
 				warn!(object_id = ?object_id, "SuiObjectResponseError : NotExists");
+				write_metric_ingest_error(object_id.to_string(), "sui_object_not_exists".to_string()).await;
 			}
 			Unknown => {
 				warn!("SuiObjectResponseError : Unknown");
+				write_metric_ingest_error("unknown".to_string(), "sui_object_unknown".to_string()).await;
 			}
 			DisplayError { error } => {
 				warn!("SuiObjectResponseError : DisplayError : {}", error);
+				write_metric_ingest_error("unknown".to_string(), "sui_object_display_error".to_string()).await;
 			}
 			ref _e @ DynamicFieldNotFound { parent_object_id } => {
 				warn!(parent_object_id = ?parent_object_id, "DynamicFieldNotFound error.");
+				write_metric_ingest_error("unknown".to_string(), "sui_object_dynamic_field_not_found".to_string()).await;
 			}
 		};
 		return None
 	}
 	if let Some(obj) = res.data {
 		let obj_type = obj.object_type().ok()?;
-		// Handle whitelist packages.
 		let whitelist_enabled = get_config_singleton().whitelist.clone().enabled;
 		let whitelist_packages = get_config_singleton().whitelist.clone().packages;
+		let blacklist_enabled = get_config_singleton().blacklist.clone().enabled;
+		let blacklist_packages = get_config_singleton().blacklist.clone().packages;
+		// Index all objects.
+		if whitelist_enabled == false && blacklist_enabled == false {
+			let mut bytes = Vec::with_capacity(4096);
+			let bson = bson::to_bson(&obj).unwrap();
+			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
+			return Some((obj.version, bytes))
+		}
+		// Index only whitelisted objects.
 		if whitelist_packages != None && whitelist_enabled == true && check_obj_type_from_string_vec(&obj_type, whitelist_packages.unwrap()) == true {
 			let mut bytes = Vec::with_capacity(4096);
 			let bson = bson::to_bson(&obj).unwrap();
 			bson.as_document().unwrap().to_writer(&mut bytes).unwrap();
 			return Some((obj.version, bytes))
 		}
-		// Handle blacklist packages.
-		let blacklist_enabled = get_config_singleton().blacklist.clone().enabled;
-		let blacklist_packages = get_config_singleton().blacklist.clone().packages;
+		// Index everything except blacklisted objects.
 		if blacklist_packages != None && blacklist_enabled == true && check_obj_type_from_string_vec(&obj_type, blacklist_packages.unwrap()) == false {
 			let mut bytes = Vec::with_capacity(4096);
 			let bson = bson::to_bson(&obj).unwrap();
@@ -156,7 +169,9 @@ pub fn parse_get_object_response(id: &ObjectID, res: SuiObjectResponse) -> Optio
 			return Some((obj.version, bytes))
 		}
 	}
-	warn!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response!");
+	// TODO: Determine root cause of this error.
+	info!(object_id = ?id, "ExtractionError : neither .data nor .error was set in get_object response.");
+	write_metric_ingest_error(id.to_string(), "sui_object_no_data_and_no_error".to_string()).await;
 	return None
 }
 

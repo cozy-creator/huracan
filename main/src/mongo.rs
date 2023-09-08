@@ -1,8 +1,11 @@
 use bson::doc;
+use influxdb::InfluxDbWriteable;
 use mongodb::Database;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 
 use crate::_prelude::*;
+use crate::influx::{write_metric_checkpoint_error, write_metric_create_checkpoint, write_metric_mongo_write_error};
+
 
 #[derive(Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -40,12 +43,16 @@ pub async fn mongo_checkpoint(cfg: &AppConfig, pc: &PipelineConfig, db: &Databas
 			.await
 		{
 			warn!("failed saving checkpoint to mongo: {:?}", err);
+			write_metric_mongo_write_error().await;
+			write_metric_checkpoint_error(cp as u64).await;
 			if retries_left > 0 {
 				retries_left -= 1;
 				continue
 			}
 			error!(error = ?err, "checkpoint {} fully completed, but could not save checkpoint status to mongo!", cp);
 		}
+		// At this point, we have successfully saved the checkpoint to MongoDB.
+		write_metric_create_checkpoint(cp as u64).await;
 		break
 	}
 }

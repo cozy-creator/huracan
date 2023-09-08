@@ -2,11 +2,10 @@ use std::{
 	collections::{btree_map::OccupiedError, BTreeMap},
 	fmt::{Display, Formatter},
 	io::Cursor,
-	iter::zip,
 	sync::atomic::{AtomicU16, Ordering::Relaxed},
 	vec::IntoIter,
+	iter::zip,
 };
-
 use anyhow::Result;
 use async_channel::{Receiver as ACReceiver, Sender as ACSender};
 use async_stream::stream;
@@ -14,7 +13,8 @@ use bson::{doc, Document};
 use chrono::Utc;
 use futures::Stream;
 use futures_batch::ChunksTimeoutStreamExt;
-use mongodb::{options::FindOneOptions, Database};
+use influxdb::InfluxDbWriteable;
+use mongodb::{Database, options::FindOneOptions};
 use pulsar::{Pulsar, TokioExecutor};
 use rocksdb::{DBWithThreadMode, SingleThreaded};
 use sui_sdk::rpc_types::{
@@ -33,12 +33,14 @@ use tokio::{
 use crate::{
 	_prelude::*,
 	client,
-	client::{parse_get_object_response, ClientPool},
+	client::{ClientPool, parse_get_object_response},
 	conf::{AppConfig, PipelineConfig},
 	ctrl_c_bool, mongo,
-	mongo::{mongo_checkpoint, Checkpoint},
-	utils::make_descending_ranges,
+	mongo::{Checkpoint, mongo_checkpoint},
+	utils::make_descending_ranges
 };
+use crate::conf::get_influx_singleton;
+use crate::influx::{get_influx_timestamp_as_milliseconds, InsertObject, ModifiedObject, write_metric_rpc_error, write_metric_rpc_request, write_metric_mongo_write_error, write_metric_checkpoints_behind, write_metric_backfill_init, write_metric_current_checkpoint, write_metric_create_checkpoint, write_metric_final_checkpoint, write_metric_pause_livescan, write_metric_start_livescan, UnchangedObject, write_metric_extraction_latency};
 
 
 // sui now allows a max of 1000 objects to be queried for at once (used to be 50), at least on the
@@ -168,6 +170,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				};
 				break cp
 			};
+			write_metric_current_checkpoint(start_cp_for_offset).await;
 			// run first livescan from last known completed checkpoint
 			let mut last_livescan_cp = coll
 				.find_one(None, FindOneOptions::builder().sort(doc! {"_id": -1}).build())
@@ -196,6 +199,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						continue
 					}
 				};
+				write_metric_current_checkpoint(latest_cp).await;
 				last_poll = Instant::now();
 
 				// TODO we need to just hook up to our own stream of outgoing completed checkpoints
@@ -207,12 +211,15 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					.await
 					.unwrap()
 					.map(|cp| cp._id);
+				write_metric_current_checkpoint(last_completed_cp.unwrap_or(0)).await;
 				let behind_cp = latest_cp - last_completed_cp.unwrap_or(0) as u64;
 				info!("ExtractionInfo: Currently behind by {} checkpoints.", behind_cp);
+				write_metric_checkpoints_behind(behind_cp).await;
 				if behind_cp > cfg.backfillthreshold as u64 {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause
+						write_metric_pause_livescan(behind_cp).await;
 						pause_livescan.store(250, Relaxed);
 						warn!("IngestWarning: Pausing livescan pipeline.");
 					}
@@ -229,6 +236,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 						async move {
 							checkpointcompleted_rx.await.ok();
 							pause.store(0, Relaxed);
+							warn!("IngestWarning: Resuming livescan pipeline.");
 						}
 					});
 					// TODO I think instead of waiting for the backfill to finish we just want to get
@@ -342,6 +350,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					// - count items for current checkpoint
 					// - submit previous checkpoint count if we've just changed checkpoints
 					let cp = item.cp as u64;
+					write_metric_current_checkpoint(cp).await;
 					if cur_cp != cp {
 						info!("ExtractionInfo: Current unprocessed items in checkpoint: {}", cur_cp);
 						if cur_cp != 0 {
@@ -418,6 +427,7 @@ async fn spawn_livescan(
 	let (cp_control_tx, cp_control_rx) = tokio::sync::mpsc::channel(cfg.livescan.queuebuffers.cpcompletions);
 	let step_size = num_checkpoint_workers;
 	for partition in 0..num_checkpoint_workers {
+		write_metric_start_livescan().await;
 		tokio::spawn(do_scan(
 			cfg.livescan.clone(),
 			IngestRoute::Livescan,
@@ -533,6 +543,7 @@ async fn spawn_pipeline_tail(
 								};
 								info!("[{}] {}ms // {}ms", source, latency, completed - ts_sui);
 								last_latency = latency;
+								write_metric_extraction_latency(source.to_string(), latency.try_into().unwrap()).await;
 							}
 						}
 						let cp = item.cp;
@@ -574,6 +585,7 @@ async fn spawn_backfill_pipeline(
 	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	info!("ExtractionInfo: Spawning backfill pipeline.");
+	write_metric_backfill_init(start_checkpoint.unwrap_or(0)).await;
 	let db = {
 		// give each pipeline its own rocksdb instance
 		let rocksdbfile = format!("{}_{}", cfg.rocksdbfile, pc.name);
@@ -590,8 +602,8 @@ async fn spawn_backfill_pipeline(
 	} else {
 		sui.get_latest_checkpoint_sequence_number().await.unwrap() as u64
 	};
+	write_metric_current_checkpoint(checkpoint_max).await;
 	info!("ExtractionInfo: Latest checkpoint was fetched via RPC: {}", checkpoint_max);
-
 	let default_num_workers = sui.configs.len();
 	let num_checkpoint_workers = pc.workers.checkpoint.unwrap_or(default_num_workers);
 
@@ -911,6 +923,7 @@ async fn do_scan(
 					// if we're in range and start is 1 or 0, we're entirely done,
 					// as that means that all remaining checkpoints are already complete
 					if *start <= 1 {
+						write_metric_final_checkpoint(cp).await;
 						break 'cp
 					}
 					// match! advance by whatever number of steps we need to end this iteration
@@ -928,6 +941,7 @@ async fn do_scan(
 				break
 			}
 		}
+		write_metric_current_checkpoint(cp).await;
 		// start fetching all tx blocks for this checkpoint
 		let q = SuiTransactionBlockResponseQuery::new(
 			Some(TransactionFilter::Checkpoint(cp as CheckpointSequenceNumber)),
@@ -1060,6 +1074,7 @@ async fn do_poll(
 			Utc::now().timestamp_millis() as u64 + last_poll.elapsed().as_millis().div_ceil(2) as u64;
 		match sui.query_transaction_blocks(q.clone(), cursor, Some(SUI_QUERY_MAX_RESULT_LIMIT), desc).await {
 			Ok(mut page) => {
+				write_metric_rpc_request("query_transaction_blocks".to_string()).await;
 				// we want to throttle only on successful responses, otherwise we'd rather try again immediately
 				last_poll = call_start;
 				retry_count = 0;
@@ -1145,17 +1160,19 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 			match sui.multi_get_object_with_options(obj_ids, query_opts.clone()).await {
 				Err(err) => {
 					warn!(error = format!("{err:?}"), "cannot fetch object data for one or more objects, retrying them individually");
+					write_metric_rpc_error("multi_get_object_with_options".to_string()).await;
 					// try one by one
 					// TODO this should be super easy to do in parallel, firing off the reqs on some tokio thread pool executor
 					for mut item in chunk {
 						match sui.get_object_with_options(item.id, query_opts.clone()).await {
 							Err(err) => {
 								error!(object_id = ?item.id, error = format!("{err:?}"), "individual fetch also failed");
+								write_metric_rpc_error("get_object_with_options".to_string()).await;
 								yield (StepStatus::Err, item);
 							},
 							Ok(res) => {
 								// TODO send them off in batches
-								if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
+								if let Some((version, bytes)) = parse_get_object_response(&item.id, res).await {
 									item.version = version;
 									item.bytes = bytes;
 									yield (StepStatus::Ok, item);
@@ -1169,12 +1186,13 @@ async fn transform_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 					// the sui endpoint is implemented such that the response items are in the same
 					// order as the input items, so we don't have to search or otherwise match them
 					if objs.len() != chunk.len() {
+						write_metric_rpc_error("unexpected_payload".to_string()).await;
 						panic!("sui.multi_get_object_with_options() mismatch between input and result len!");
 					}
 					for (mut item, res) in zip(chunk, objs) {
 						// TODO if we can't get object info, do we really want to skip indexing this change? or is there something more productive we can do?
 						// TODO send them off in batches
-						if let Some((version, bytes)) = parse_get_object_response(&item.id, res) {
+						if let Some((version, bytes)) = parse_get_object_response(&item.id, res).await {
 							item.version = version;
 							item.bytes = bytes;
 							yield (StepStatus::Ok, item);
@@ -1195,6 +1213,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 ) {
 	// e.g. prod_testnet_objects
 	let collection = mongo::mongo_collection_name(&cfg, "");
+	let influx_client = get_influx_singleton();
 
 	pin!(stream);
 	while let Some(chunk) = stream.next().await {
@@ -1265,6 +1284,7 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 				Ok(res) => {
 					// res: {n: i32, upserted: [{index: i32, _id: String}, ...], nModified: i32, writeErrors: [{index: i32, code: i32}, ...]}
 					if res.get_i32("n").unwrap() != n as i32 {
+						write_metric_mongo_write_error().await;
 						panic!(
 							"failed to execute at least one of the upserts: {:#?}",
 							res.get_array("writeErrors").unwrap()
@@ -1279,15 +1299,38 @@ async fn load_batched<'a, S: Stream<Item = Vec<ObjectItem>> + 'a>(
 
 					let inserted = if let Ok(upserted) = res.get_array("upserted") { upserted.len() } else { 0 };
 					let modified = res.get_i32("nModified").unwrap();
-					let missing = n - (inserted + modified as usize);
+					let unchanged = n - (inserted + modified as usize);
 					let missing_info =
-						if missing > 0 { format!(" // {} items without effect!", missing) } else { String::new() };
+						if unchanged > 0 { format!(" // {} items without effect!", unchanged) } else { String::new() };
 					info!("|> mongo: {} total / {} updated / {} created{}", n, modified, inserted, missing_info);
 
-					break
+					// We track the number of MongoDB operations in InfluxDB.
+					let ts = get_influx_timestamp_as_milliseconds().await;
+					let influx_items = vec!(
+						InsertObject {
+							time: ts,
+							count: inserted as i32,
+						}.into_query("inserted_object"),
+						ModifiedObject {
+                            time: ts,
+                            count: modified,
+                        }.into_query("modified_object"),
+						UnchangedObject {
+							time: ts,
+                            count: unchanged as i32,
+						}.into_query("missing_object"),
+					);
+					let write_result = influx_client.query(influx_items).await;
+					match write_result {
+						Ok(string) => debug!(string),
+						Err(error) => warn!("Could not write to influx: {}", error),
+					}
+					break;
 				}
 				Err(err) => {
 					// the whole thing failed; retry a few times, then assume it's a bug
+					// Report to InfluxDB
+					write_metric_mongo_write_error().await;
 					if retries_left == 0 {
 						panic!("final attempt to run mongo batch failed: {:?}", err);
 					}

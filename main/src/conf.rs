@@ -2,6 +2,7 @@ use figment::{
 	providers::{Env, Format, Yaml},
 	Figment,
 };
+use influxdb::Client;
 use mongodb::{
 	options::{ClientOptions, Compressor, ServerApi, ServerApiVersion},
 	Database,
@@ -14,14 +15,14 @@ use crate::{_prelude::*, client::ClientPool};
 #[serde(deny_unknown_fields)]
 pub struct PipelineConfig {
 	#[serde(default)]
-	pub name:                String,
-	pub queuebuffers:        QueueBuffersConfig,
-	pub workers:             WorkersConfig,
-	pub objectqueries:       ObjectQueriesConfig,
-	pub mongo:               MongoPipelineStepConfig,
+	pub name:                     String,
+	pub queuebuffers:             QueueBuffersConfig,
+	pub workers:                  WorkersConfig,
+	pub objectqueries:            ObjectQueriesConfig,
+	pub mongo:                    MongoPipelineStepConfig,
 	pub checkpointretries:        usize,
 	pub checkpointretrytimeoutms: u64,
-	pub tracklatency:        bool,
+	pub tracklatency:             bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -88,24 +89,32 @@ pub struct PulsarConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct InfluxConfig {
+	pub database: String,
+	pub token: String,
+	pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogConfig {
-	pub level:  CLevel,
-	pub filter: Option<Vec<String>>,
+	pub level:        CLevel,
+	pub filter:       Option<Vec<String>>,
 	// Must be either "stdout" or "logfile"
-	pub output: String,
+	pub output:       String,
 	// Ignored unless output == "logfile".
 	// Please declare as absolute path, example: "/var/log/indexer.log"
-	pub logfilepath: String,
+	pub logfilepath:  String,
 	pub tokioconsole: bool,
 }
 
 impl Default for LogConfig {
 	fn default() -> LogConfig {
 		LogConfig {
-			level: CLevel(Level::INFO),
-			filter: None,
-			output: "logfile".to_string(),
-			logfilepath: "/var/log/indexer.log".to_string(),
+			level:        CLevel(Level::INFO),
+			filter:       None,
+			output:       "logfile".to_string(),
+			logfilepath:  "/var/log/indexer.log".to_string(),
 			tokioconsole: false,
 		}
 	}
@@ -129,7 +138,7 @@ pub struct SuiConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Whitelist{
+pub struct Whitelist {
 	pub enabled:  bool,
 	pub packages: Option<Vec<String>>,
 }
@@ -156,22 +165,23 @@ impl Default for Blacklist {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
-	pub env:                 String,
-	pub net:                 String,
-	pub rocksdbfile:         String,
-	pub backfill:            PipelineConfig,
-	pub livescan:            PipelineConfig,
-	pub backfillthreshold:   usize,
-	pub pausepollonbackfill: bool,
-	pub pollintervalms:      u64,
-	pub mongo:               MongoConfig,
-	pub pulsar:              PulsarConfig,
-	pub sui:                 SuiConfig,
-	pub log:                 LogConfig,
-	pub backfillonly:	     bool,
+	pub env:                     String,
+	pub net:                     String,
+	pub rocksdbfile:             String,
+	pub backfill:                PipelineConfig,
+	pub livescan:                PipelineConfig,
+	pub backfillthreshold:       usize,
+	pub pausepollonbackfill:     bool,
+	pub pollintervalms:          u64,
+	pub mongo:                   MongoConfig,
+	pub pulsar:                  PulsarConfig,
+	pub influx:                  InfluxConfig,
+	pub sui:                     SuiConfig,
+	pub log:                     LogConfig,
+	pub backfillonly:            bool,
 	pub backfillstartcheckpoint: Option<u64>,
-	pub whitelist:           Whitelist,
-	pub blacklist:           Blacklist,
+	pub whitelist:               Whitelist,
+	pub blacklist:               Blacklist,
 }
 
 impl AppConfig {
@@ -213,13 +223,25 @@ pub(crate) static APPCONFIG: OnceCell<AppConfig> = OnceCell::const_new();
 
 // Setup config singleton
 pub async fn setup_config_singleton(cfg: &AppConfig) -> &'static AppConfig {
-	APPCONFIG.get_or_init(|| async {
-		cfg.clone()
-	}).await
+	APPCONFIG.get_or_init(|| async { cfg.clone() }).await
 }
 
 pub fn get_config_singleton() -> &'static AppConfig {
-	APPCONFIG.get().expect("ConfigError: config singleton not initialized")
+	APPCONFIG.get().expect("ConfigError: config singleton could not be loaded.")
+}
+
+pub(crate) static INFLUXCLIENT: OnceCell<influxdb::Client> = OnceCell::const_new();
+
+pub async fn setup_influx_singleton() -> &'static influxdb::Client {
+	INFLUXCLIENT.get_or_init(|| async {
+		let influxconfig = get_config_singleton().influx.clone();
+		let client = Client::new(influxconfig.url, influxconfig.database).with_token(influxconfig.token);
+		return client;
+	}).await
+}
+
+pub fn get_influx_singleton() -> &'static influxdb::Client {
+	INFLUXCLIENT.get().expect("ConfigError: Influx client could not be loaded.")
 }
 
 #[derive(Clone, Debug)]
