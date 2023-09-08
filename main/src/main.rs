@@ -44,10 +44,14 @@ async fn main() -> anyhow::Result<()> {
 	setup_config_singleton(&cfg).await;
 	setup_influx_singleton().await;
 
-	if cfg.backfillonly == true {
+	if cfg.backfillonly == true && cfg.livescanonly == true {
+		panic!("livescanonly is true AND backfillonly is true. Reconfigure in config.yaml");
+	}
+	if cfg.backfillonly == true && cfg.livescanonly == false {
 		let start_checkpoint = cfg.backfillstartcheckpoint;
 		etl::run_backfill_only(&cfg, start_checkpoint).await?;
-	} else {
+	}
+	else {
 		etl::run(&cfg).await.unwrap();
 	}
 

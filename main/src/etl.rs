@@ -215,7 +215,8 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 				let behind_cp = latest_cp - last_completed_cp.unwrap_or(0) as u64;
 				info!("ExtractionInfo: Currently behind by {} checkpoints.", behind_cp);
 				write_metric_checkpoints_behind(behind_cp).await;
-				if behind_cp > cfg.backfillthreshold as u64 {
+				// Do not initialize a backfill pipeline if livescanonly is enabled.
+				if behind_cp > cfg.backfillthreshold as u64 && cfg.livescanonly == false {
 					warn!("IngestWarning: Initializing backfill pipeline.");
 					if cfg.pausepollonbackfill {
 						// ask low-latency work to pause

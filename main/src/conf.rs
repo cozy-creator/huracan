@@ -179,6 +179,7 @@ pub struct AppConfig {
 	pub sui:                     SuiConfig,
 	pub log:                     LogConfig,
 	pub backfillonly:            bool,
+	pub livescanonly:            bool,
 	pub backfillstartcheckpoint: Option<u64>,
 	pub whitelist:               Whitelist,
 	pub blacklist:               Blacklist,
