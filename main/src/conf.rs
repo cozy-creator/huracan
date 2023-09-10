@@ -93,6 +93,7 @@ pub struct InfluxConfig {
 	pub database: String,
 	pub token: String,
 	pub url: String,
+	pub transactiontpicbase: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

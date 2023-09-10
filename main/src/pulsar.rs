@@ -30,7 +30,7 @@ pub async fn make_transaction_producer(
         .producer()
         // e.g. {persistent://public/default/}{prod}_{testnet}_{objects}_{retries}
         // braces added for clarity of discerning between the different parts
-        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.transaction_topicbase, cfg.env, cfg.net, ty))
+        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.transactiontopicbase, cfg.env, cfg.net, ty))
         .build()
         .await?)
 }
@@ -66,5 +66,5 @@ pub async fn setup_pulsar_singleton() -> &'static Pulsar<TokioExecutor> {
 }
 
 pub fn get_pulsar_singleton() -> &'static Pulsar<TokioExecutor> {
-	PULSARCLIENT.get().expect("ConfigError: Pulsar Client singleton could not be loaded.").unwrap()
+	PULSARCLIENT.get().expect("ConfigError: Pulsar Client singleton could not be loaded.")
 }

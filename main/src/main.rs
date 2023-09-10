@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_config_singleton(&cfg).await;
 	setup_influx_singleton().await;
-	setup_pulsar_singleton().await.expect("Unuable to initialize Pulsar client.");
+	setup_pulsar_singleton().await;
 
 	if cfg.backfillonly == true && cfg.livescanonly == true {
 		panic!("livescanonly is true AND backfillonly is true. Reconfigure in config.yaml");
