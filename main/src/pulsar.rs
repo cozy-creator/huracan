@@ -28,9 +28,9 @@ pub async fn make_transaction_producer(
 	let cfg = get_config_singleton();
 	Ok(pulsar
         .producer()
-        // e.g. {persistent://public/default/}{prod}_{testnet}_{objects}_{retries}
+        // e.g. {persistent://public/default/}{prod}_{testnet}_{your-variable}
         // braces added for clarity of discerning between the different parts
-        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.transactiontopicbase, cfg.env, cfg.net, ty))
+        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.topicbase, cfg.env, cfg.net, ty))
         .build()
         .await?)
 }
