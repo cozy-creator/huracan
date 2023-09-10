@@ -7,30 +7,26 @@ use tokio::sync::OnceCell;
 use crate::_prelude::*;
 use crate::conf::get_config_singleton;
 
-pub async fn make_producer(
-	cfg: &AppConfig,
-	pulsar: &Pulsar<TokioExecutor>,
-	ty: &str,
-) -> anyhow::Result<Producer<TokioExecutor>> {
-	Ok(pulsar
+pub async fn make_producer(topic_suffix: &str ) -> anyhow::Result<Producer<TokioExecutor>> {
+	let client = get_pulsar_singleton();
+	let cfg = get_config_singleton();
+	Ok(client
 		.producer()
 		// e.g. {persistent://public/default/}{prod}_{testnet}_{objects}_{retries}
 		// braces added for clarity of discerning between the different parts
-		.with_topic(&format!("{}{}_{}_{}_{}", cfg.pulsar.topicbase, cfg.env, cfg.net, cfg.mongo.collectionbase, ty))
+		.with_topic(&format!("{}{}_{}_{}_{}", cfg.pulsar.topicbase, cfg.env, cfg.net, cfg.mongo.collectionbase, topic_suffix))
 		.build()
 		.await?)
 }
 
-pub async fn make_transaction_producer(
-	pulsar: &Pulsar<TokioExecutor>,
-	ty: &str,
-) -> anyhow::Result<Producer<TokioExecutor>> {
+pub async fn make_transaction_producer(topic_suffix: &str ) -> anyhow::Result<Producer<TokioExecutor>> {
+	let client = get_pulsar_singleton();
 	let cfg = get_config_singleton();
-	Ok(pulsar
+	Ok(client
         .producer()
         // e.g. {persistent://public/default/}{prod}_{testnet}_{your-variable}
         // braces added for clarity of discerning between the different parts
-        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.topicbase, cfg.env, cfg.net, ty))
+        .with_topic(&format!("{}{}_{}_{}_", cfg.pulsar.topicbase, cfg.env, cfg.net, topic_suffix))
         .build()
         .await?)
 }

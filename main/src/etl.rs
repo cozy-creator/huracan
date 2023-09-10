@@ -92,8 +92,7 @@ impl Display for StepStatus {
 // This is the entrypoint when environment variable BACKFILL_ONLY = true. This allows us to begin a highly parallel backfill starting at a specific checkpoint.
 pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -> Result<()> {
 	let sui = cfg.sui().await?;
-	let pulsar = crate::pulsar::create(&cfg).await?;
-	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.backfill, sui, pulsar, start_checkpoint).await?;
+	let (_, handle) = spawn_backfill_pipeline(&cfg, &cfg.backfill, sui, start_checkpoint).await?;
 	handle.await?;
 	Ok(())
 }
@@ -103,7 +102,6 @@ pub async fn run_backfill_only(cfg: &AppConfig, start_checkpoint: Option<u64>) -
 pub async fn run(cfg: &AppConfig) -> Result<()> {
 	info!("ExtractionInfo: Initializing run().");
 	let mut sui = cfg.sui().await?;
-	let pulsar = crate::pulsar::create(&cfg).await?;
 	let stop = ctrl_c_bool();
 	let pause_livescan = Arc::new(AtomicU16::new(0));
 
@@ -137,7 +135,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 
 	// rest of the livescan pipeline
 	let (livescan_cp_control_tx, livescan_handle) =
-		spawn_pipeline_tail(cfg.clone(), cfg.livescan.clone(), sui.clone(), pulsar.clone(), livescan_items_rx.clone())
+		spawn_pipeline_tail(cfg.clone(), cfg.livescan.clone(), sui.clone(),  livescan_items_rx.clone())
 			.await?;
 
 	// observe checkpoints flow:
@@ -450,12 +448,10 @@ async fn spawn_pipeline_tail(
 	cfg: AppConfig,
 	pc: PipelineConfig,
 	sui: ClientPool,
-	pulsar: Pulsar<TokioExecutor>,
 	object_ids_rx: ACReceiver<(Option<TransactionDigest>, ObjectItem)>,
 ) -> Result<(TSender<(CheckpointSequenceNumber, u32)>, JoinHandle<u64>)> {
 	info!("ExtractionInfo: Spawning pipeline tail.");
 	let mongo = cfg.mongo.client(&pc.mongo).await?;
-
 	let default_num_workers = sui.configs.len();
 	let num_object_workers = pc.workers.object.unwrap_or(default_num_workers);
 	let num_mongo_workers = pc.workers.mongo.unwrap_or(default_num_workers);
@@ -470,7 +466,7 @@ async fn spawn_pipeline_tail(
 		for _ in 0..num_object_workers {
 			tokio::spawn({
 				let sui = sui.clone();
-				let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await?;
+				let mut retries = crate::pulsar::make_producer("retries").await?;
 				let batch_size = pc.objectqueries.batchsize;
 				let batch_wait_timeout = pc.objectqueries.batchwaittimeoutms;
 				let object_ids_rx = object_ids_rx.clone();
@@ -582,7 +578,6 @@ async fn spawn_backfill_pipeline(
 	cfg: &AppConfig,
 	pc: &PipelineConfig,
 	mut sui: ClientPool,
-	pulsar: Pulsar<TokioExecutor>,
 	start_checkpoint: Option<u64>,
 ) -> Result<(tokio::sync::oneshot::Receiver<()>, JoinHandle<u64>)> {
 	info!("ExtractionInfo: Spawning backfill pipeline.");
@@ -644,7 +639,7 @@ async fn spawn_backfill_pipeline(
 	let (object_ids_tx, object_ids_rx) = async_channel::bounded(pc.queuebuffers.checkpointout);
 
 	let (cp_control_tx, handle) =
-		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), pulsar, object_ids_rx).await?;
+		spawn_pipeline_tail(cfg.clone(), pc.clone(), sui.clone(), object_ids_rx).await?;
 
 	info!("Initializing {} number of backfill workers.", num_checkpoint_workers);
 	let (checkpointfinished_tx, checkpointfinished_rx) = tokio::sync::oneshot::channel();
