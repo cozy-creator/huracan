@@ -224,7 +224,7 @@ pub async fn run(cfg: &AppConfig) -> Result<()> {
 					}
 					// run backfill
 					let (checkpointcompleted_rx, handle) =
-						spawn_backfill_pipeline(&cfg, &cfg.backfill, sui.clone(), pulsar.clone(), None)
+						spawn_backfill_pipeline(&cfg, &cfg.backfill, sui.clone(), None)
 							.await
 							.unwrap();
 					// We continue low-latency work as soon as the first checkpoint crawl of the backfill completes,
@@ -522,7 +522,7 @@ async fn spawn_pipeline_tail(
 		let pc = pc.clone();
 		async move {
 			// finally: check completions, issue retries
-			let mut retries = crate::pulsar::make_producer(&cfg, &pulsar, "retries").await.unwrap();
+			let mut retries = crate::pulsar::make_producer("retries").await.unwrap();
 			let mut completions_left = HashMap::new();
 			let mut max_cp_completed = 0u64;
 			let mut last_latency = 0;
