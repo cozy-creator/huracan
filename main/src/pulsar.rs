@@ -50,11 +50,21 @@ pub async fn create(cfg: &AppConfig) -> anyhow::Result<Pulsar<TokioExecutor>> {
 pub(crate) static PULSARCLIENT: OnceCell<Pulsar<TokioExecutor>> = OnceCell::const_new();
 
 // Setup config singleton
-pub async fn setup_pulsar_singleton() -> anyhow::Result<Pulsar<TokioExecutor>> {
+pub async fn setup_pulsar_singleton() -> &'static Pulsar<TokioExecutor> {
 	let cfg = get_config_singleton();
-	PULSARCLIENT.get_or_init(|| async { create(cfg) }).await.unwrap()
+	PULSARCLIENT.get_or_init(|| async {
+		Pulsar::builder(&cfg.pulsar.url, TokioExecutor)
+			   .with_auth_provider(OAuth2Authentication::client_credentials(OAuth2Params {
+				   issuer_url:      cfg.pulsar.issuer.clone(),
+				   credentials_url: cfg.pulsar.credentials.to_string().clone(),
+				   audience:        Some(cfg.pulsar.audience.clone()),
+				   scope:           None,
+			   }))
+			   .build()
+			   .await.unwrap()
+	}).await
 }
 
-pub fn get_pulsar_singleton() -> Pulsar<TokioExecutor> {
+pub fn get_pulsar_singleton() -> &'static Pulsar<TokioExecutor> {
 	PULSARCLIENT.get().expect("ConfigError: Pulsar Client singleton could not be loaded.").unwrap()
 }
