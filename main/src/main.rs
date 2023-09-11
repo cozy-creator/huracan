@@ -17,6 +17,7 @@ use conf::AppConfig;
 use dotenv::dotenv;
 use tracing_subscriber::filter::EnvFilter;
 use crate::conf::{setup_config_singleton, setup_influx_singleton};
+use crate::pulsar::setup_pulsar_singleton;
 
 mod _prelude;
 mod client;
@@ -43,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
 	setup_config_singleton(&cfg).await;
 	setup_influx_singleton().await;
+	setup_pulsar_singleton().await;
 
 	if cfg.backfillonly == true && cfg.livescanonly == true {
 		panic!("livescanonly is true AND backfillonly is true. Reconfigure in config.yaml");
