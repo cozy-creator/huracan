@@ -1,0 +1,1 @@
+db.createUser( { user: "sui-mainnet", pwd: "sui-mainnet", /* or cleartext password*/ roles: [ { role: "userAdminAnyDatabase", db: "sui-mainnet" }, { role: "readWriteAnyDatabase", db: "sui-mainnet" }] })
